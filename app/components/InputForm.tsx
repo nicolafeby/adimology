@@ -246,7 +246,7 @@ export default function InputForm({
                 opacity: loading ? 0.6 : 1
               }}
             >
-              {loading ? '...' : 'Adimology'}
+              {loading ? '...' : 'Cocokologi'}
             </button>
 
             <button

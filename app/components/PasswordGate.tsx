@@ -87,7 +87,7 @@ export default function PasswordGate({ children }: PasswordGateProps) {
         <div className="password-gate-icon">
           <Lock size={40} />
         </div>
-        <h2 className="password-gate-title">Adimology</h2>
+        <h2 className="password-gate-title">Cocokologi</h2>
         <p className="password-gate-subtitle">Masukkan password untuk mengakses aplikasi</p>
 
         <form onSubmit={handleUnlock} className="password-gate-form">

@@ -98,6 +98,18 @@ export interface MarketData {
   totalOffer: number;
 }
 
+export interface OrderbookLevel {
+  price: number;
+  volume: number;
+  queues: number;
+  changePercentage: number;
+}
+
+export interface OrderbookSnapshot {
+  bid: OrderbookLevel[];
+  offer: OrderbookLevel[];
+}
+
 export interface CalculatedData {
   totalPapan: number;
   rataRataBidOfer: number;
@@ -116,6 +128,7 @@ export interface StockAnalysisResult {
   isFromHistory?: boolean;
   historyDate?: string;
   sector?: string;
+  orderbook?: OrderbookSnapshot;
 }
 
 export interface ApiResponse {
@@ -270,37 +283,6 @@ export interface AgentStoryResult {
   sources?: SourceCitation[];
 }
 
-
-// Broker Flow Types (from tradersaham broker-intelligence API)
-export interface BrokerFlowDailyData {
-  d: string;        // Date (YYYY-MM-DD)
-  n: number;        // Net value
-  p: number;        // Price
-  a: number;        // Average (0 if selling)
-}
-
-export interface BrokerFlowActivity {
-  broker_code: string;
-  stock_code: string;
-  broker_status: 'Bandar' | 'Whale' | 'Retail' | 'Mix';
-  stock_name: string;
-  net_value: string;
-  total_buy_value: string;
-  total_buy_volume: string;
-  buy_days: string;
-  active_days: string;
-  consistency_pct: string;
-  daily_data: BrokerFlowDailyData[];
-  current_price: string;
-  float_pl_pct: string;
-}
-
-export interface BrokerFlowResponse {
-  trading_dates: string[];
-  total_trading_days: number;
-  sort_by: string;
-  activities: BrokerFlowActivity[];
-}
 
 // Background Job Log Types
 export interface BackgroundJobLogEntry {

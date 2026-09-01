@@ -1781,7 +1781,7 @@ h3 {
 /* Hide scrollbar but keep functionality */
 .app-sidebar,
 .keystats-card,
-.broker-flow-card,
+.orderbook-card,
 .broker-summary-card,
 .compact-card,
 .watchlist-items-container {
@@ -1793,12 +1793,197 @@ h3 {
 
 .app-sidebar::-webkit-scrollbar,
 .keystats-card::-webkit-scrollbar,
-.broker-flow-card::-webkit-scrollbar,
+.orderbook-card::-webkit-scrollbar,
 .broker-summary-card::-webkit-scrollbar,
 .compact-card::-webkit-scrollbar,
 .watchlist-items-container::-webkit-scrollbar {
   display: none;
   /* Chrome, Safari and Opera */
+}
+
+/* ===== Orderbook Card ===== */
+.orderbook-card {
+  width: 100%;
+  height: 600px;
+  padding: 1.25rem;
+  overflow-y: auto;
+  background: var(--glass-frost), var(--glass-bg);
+  backdrop-filter: blur(40px) saturate(140%);
+  border: 1px solid var(--glass-border);
+  border-radius: 20px;
+  box-shadow: var(--shadow-lg), var(--glass-reflection), var(--glass-inner-glow);
+}
+
+.orderbook-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 0.75rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.orderbook-title,
+.orderbook-source {
+  display: block;
+}
+
+.orderbook-title {
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.orderbook-source {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  font-weight: 500;
+}
+
+.orderbook-last-price {
+  text-align: right;
+}
+
+.orderbook-last-price span,
+.orderbook-summary span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+}
+
+.orderbook-last-price strong {
+  color: var(--text-primary);
+  font-size: 1rem;
+}
+
+.orderbook-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  margin-bottom: 0.65rem;
+}
+
+.orderbook-summary > div {
+  padding: 0.6rem;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--glass-inner-glow);
+  border-radius: 8px;
+}
+
+.orderbook-summary strong {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--text-primary);
+  font-size: 0.75rem;
+}
+
+.orderbook-bid-text {
+  color: var(--sentiment-positive) !important;
+}
+
+.orderbook-offer-text {
+  color: var(--sentiment-negative) !important;
+}
+
+.orderbook-pressure {
+  display: flex;
+  height: 5px;
+  margin-bottom: 1rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border-color);
+}
+
+.orderbook-pressure-bid {
+  background: var(--sentiment-positive);
+}
+
+.orderbook-pressure-offer {
+  background: var(--sentiment-negative);
+}
+
+.orderbook-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.orderbook-side {
+  min-width: 0;
+}
+
+.orderbook-table-header,
+.orderbook-level {
+  display: grid;
+  grid-template-columns: minmax(62px, 1fr) minmax(55px, 1fr) minmax(44px, 0.7fr);
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.45rem 0.5rem;
+}
+
+.orderbook-table-header {
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.orderbook-table-header span:not(:first-child),
+.orderbook-level > span {
+  text-align: right;
+}
+
+.orderbook-level {
+  position: relative;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  border-bottom: 1px solid var(--glass-inner-glow);
+}
+
+.orderbook-level > *:not(.orderbook-level-depth) {
+  position: relative;
+  z-index: 1;
+}
+
+.orderbook-level-depth {
+  position: absolute;
+  inset: 2px 0 2px auto;
+  opacity: 0.09;
+}
+
+.orderbook-level-depth.bid {
+  background: var(--sentiment-positive);
+}
+
+.orderbook-level-depth.offer {
+  background: var(--sentiment-negative);
+}
+
+.orderbook-no-level,
+.orderbook-empty {
+  padding: 2rem 1rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+@media (max-width: 600px) {
+  .orderbook-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .orderbook-card {
+    height: auto;
+    min-height: 500px;
+  }
 }
 
 /* ===== Chartbit Button ===== */

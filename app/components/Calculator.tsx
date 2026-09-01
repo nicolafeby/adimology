@@ -7,7 +7,7 @@ import BrokerSummaryCard from './BrokerSummaryCard';
 import KeyStatsCard from './KeyStatsCard';
 import AgentStoryCard from './AgentStoryCard';
 import PriceGraph from './PriceGraph';
-import BrokerFlowCard from './BrokerFlowCard';
+import OrderbookCard from './OrderbookCard';
 import EmitenHistoryCard from './EmitenHistoryCard';
 
 import * as htmlToImage from 'html-to-image';
@@ -437,7 +437,7 @@ export default function Calculator({ selectedStock }: CalculatorProps) {
               <EmitenHistoryCard emiten={result.input.emiten} />
             </div>
 
-            {/* Price Graph + Broker Flow Section */}
+            {/* Price Graph + Orderbook Section */}
             <div style={{
               gridColumn: '1 / -1',
               width: '100%',
@@ -450,7 +450,11 @@ export default function Calculator({ selectedStock }: CalculatorProps) {
                 <PriceGraph ticker={result.input.emiten} />
               </div>
               <div style={{ flex: '1 1 0', minWidth: '400px', display: 'flex' }}>
-                <BrokerFlowCard emiten={result.input.emiten} />
+                <OrderbookCard
+                  emiten={result.input.emiten}
+                  marketData={result.marketData}
+                  orderbook={result.orderbook}
+                />
               </div>
             </div>
 

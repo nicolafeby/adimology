@@ -105,6 +105,26 @@ export async function POST(request: NextRequest) {
     marketData.offerTeratas = offerPrices.length > 0 ? Math.max(...offerPrices) : Number(obData.high || 0);
     marketData.bidTerbawah = bidPrices.length > 0 ? Math.min(...bidPrices) : 0;
 
+    const toOrderbookLevel = (level: {
+      price: string;
+      volume: string;
+      que_num: string;
+      change_percentage: string;
+    }) => ({
+      price: Number(level.price),
+      volume: parseLot(level.volume),
+      queues: parseLot(level.que_num),
+      changePercentage: Number(level.change_percentage || 0),
+    });
+
+    // Orderbook is a live snapshot, so do not attach it to historical analysis.
+    const orderbook = isToday
+      ? {
+          bid: (obData.bid || []).slice(0, 10).map(toOrderbookLevel),
+          offer: (obData.offer || []).slice(0, 10).map(toOrderbookLevel),
+        }
+      : undefined;
+
     // 3. For any non-today queries (past single dates or ranges), Override Price from Database (if available)
     if (!isToday) {
       const histPrice = await getStockPriceByDate(emiten, toDate);
@@ -150,6 +170,7 @@ export async function POST(request: NextRequest) {
         },
         brokerSummary,
         sector,
+        orderbook,
       },
     };
 

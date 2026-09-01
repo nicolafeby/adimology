@@ -57,6 +57,22 @@ export async function GET(request: NextRequest) {
       data: rawData,
     });
   } catch (error) {
+    const cause = error instanceof Error ? error.cause : undefined;
+    const causeCode = cause && typeof cause === 'object' && 'code' in cause
+      ? String(cause.code)
+      : undefined;
+
+    if (causeCode === 'CERT_HAS_EXPIRED') {
+      console.warn('Broker Flow unavailable: api.tradersaham.com certificate has expired');
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Layanan Broker Flow sedang tidak tersedia karena sertifikat API Tradersaham kedaluwarsa.',
+        },
+        { status: 503 }
+      );
+    }
+
     console.error('Broker Flow API error:', error);
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : 'Failed to fetch broker flow data' },

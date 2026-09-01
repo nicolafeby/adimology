@@ -36,8 +36,14 @@ export default function PriceGraph({ ticker }: PriceGraphProps) {
   useEffect(() => {
     if (!container.current) return;
 
-    // Clean up previous widget if any
-    container.current.innerHTML = '';
+    const currentContainer = container.current;
+
+    // TradingView expects this mount element to exist next to the embed script.
+    const widgetMount = document.createElement('div');
+    widgetMount.className = 'tradingview-widget-container__widget';
+    widgetMount.style.height = '100%';
+    widgetMount.style.width = '100%';
+    currentContainer.replaceChildren(widgetMount);
 
     const script = document.createElement("script");
     script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
@@ -76,9 +82,15 @@ export default function PriceGraph({ ticker }: PriceGraphProps) {
       "gridColor": isLightTheme ? "rgba(46, 46, 46, 0.06)" : "rgba(242, 242, 242, 0.06)"
     };
 
-    script.innerHTML = JSON.stringify(widgetConfig);
+    script.textContent = JSON.stringify(widgetConfig);
 
-    container.current.appendChild(script);
+    currentContainer.appendChild(script);
+
+    return () => {
+      // Prevent an old async widget from rendering after ticker/theme changes.
+      script.remove();
+      currentContainer.replaceChildren();
+    };
   }, [ticker, isLightTheme]);
 
   return (
@@ -156,9 +168,7 @@ export default function PriceGraph({ ticker }: PriceGraphProps) {
         ref={container}
         className="tradingview-widget-container" 
         style={{ flex: 1, width: "100%" }}
-      >
-        <div className="tradingview-widget-container__widget" style={{ height: "100%", width: "100%" }}></div>
-      </div>
+      />
     </div>
   );
 }

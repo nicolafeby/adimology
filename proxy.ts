@@ -8,6 +8,7 @@ const PUBLIC_PATHS = [
   '/api/auth/verify-password',
   '/api/auth/check-password',
   '/api/auth/set-password', // Allow initial setup
+  '/api/update-token', // Allow the Chrome extension to sync the Stockbit token
 ];
 
 export async function proxy(request: NextRequest) {
@@ -26,7 +27,7 @@ export async function proxy(request: NextRequest) {
   }
 
   // Allow public auth routes
-  if (PUBLIC_PATHS.some(path => pathname.startsWith(path))) {
+  if (PUBLIC_PATHS.includes(pathname)) {
     return NextResponse.next();
   }
 

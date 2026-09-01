@@ -1,9 +1,31 @@
+import 'server-only';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+let supabaseAdmin: typeof supabase | null = null;
+
+function getSupabaseAdmin() {
+  if (supabaseAdmin) return supabaseAdmin;
+
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceRoleKey) {
+    throw new Error('SUPABASE_SERVICE_ROLE_KEY is required for server-side session access');
+  }
+
+  supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+
+  return supabaseAdmin;
+}
 
 /**
  * Save stock query to database
@@ -46,7 +68,7 @@ export async function saveStockQuery(data: {
  * Get session value by key
  */
 export async function getSessionValue(key: string): Promise<string | null> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseAdmin()
     .from('session')
     .select('value')
     .eq('key', key)
@@ -75,7 +97,7 @@ export interface TokenStatus {
  * Get full token status including expiry information
  */
 export async function getTokenStatus(): Promise<TokenStatus> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseAdmin()
     .from('session')
     .select('value, expires_at, last_used_at, is_valid, updated_at')
     .eq('key', 'stockbit_token')
@@ -119,7 +141,7 @@ export async function upsertSession(
   value: string, 
   expiresAt?: Date
 ) {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseAdmin()
     .from('session')
     .upsert(
       { 
@@ -142,7 +164,7 @@ export async function upsertSession(
  * Update token last used timestamp (call after successful API request)
  */
 export async function updateTokenLastUsed() {
-  const { error } = await supabase
+  const { error } = await getSupabaseAdmin()
     .from('session')
     .update({ last_used_at: new Date().toISOString() })
     .eq('key', 'stockbit_token');
@@ -156,7 +178,7 @@ export async function updateTokenLastUsed() {
  * Mark token as invalid (call when receiving 401 from Stockbit API)
  */
 export async function invalidateToken() {
-  const { error } = await supabase
+  const { error } = await getSupabaseAdmin()
     .from('session')
     .update({ is_valid: false })
     .eq('key', 'stockbit_token');
@@ -173,7 +195,7 @@ export async function setTokenExpiry(hoursFromNow: number = 24) {
   const expiresAt = new Date();
   expiresAt.setHours(expiresAt.getHours() + hoursFromNow);
   
-  const { error } = await supabase
+  const { error } = await getSupabaseAdmin()
     .from('session')
     .update({ expires_at: expiresAt.toISOString() })
     .eq('key', 'stockbit_token');

@@ -1,18 +1,20 @@
 import React from 'react';
 
 export function getDefaultDate(): string {
-  const today = new Date();
-  const dayOfWeek = today.getDay();
-  
-  // If Saturday (6), go back 1 day to Friday
-  // If Sunday (0), go back 2 days to Friday
-  if (dayOfWeek === 6) {
-    today.setDate(today.getDate() - 1);
-  } else if (dayOfWeek === 0) {
-    today.setDate(today.getDate() - 2);
+  const date = new Date();
+
+  // Broker summaries for the current trading day are not always published yet,
+  // so default to the most recent completed weekday.
+  date.setDate(date.getDate() - 1);
+  while (date.getDay() === 0 || date.getDay() === 6) {
+    date.setDate(date.getDate() - 1);
   }
-  
-  return today.toISOString().split('T')[0];
+
+  // Format in local time to avoid shifting the date around UTC boundaries.
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 export function renderWithLinks(text: string | undefined): React.ReactNode {

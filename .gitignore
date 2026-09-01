@@ -46,3 +46,5 @@ next-env.d.ts
 stockbit-token-extension/manifest.json
 stockbit-token-extension/background.js
 !stockbit-token-extension/*.example
+
+.npm-cache/

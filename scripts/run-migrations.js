@@ -39,7 +39,9 @@ try {
 
 // Configuration
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
+  || process.env.SUPABASE_KEY
+  || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const MIGRATIONS_DIR = path.join(__dirname, '..', 'supabase');
 
 // Validate environment variables
@@ -51,8 +53,17 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 }
 
 // Initialize Supabase client
+// Migrations only use PostgREST/RPC. Supplying an unused transport prevents
+// supabase-js from requiring Node's native WebSocket implementation on Node 20.
+class UnusedWebSocketTransport {}
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-  auth: { persistSession: false }
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false,
+  },
+  realtime: { transport: UnusedWebSocketTransport },
 });
 
 /**
@@ -70,7 +81,7 @@ async function setupMigrationInfrastructure() {
   
   const setupSQL = `
 -- Create schema_migrations table for tracking
-CREATE TABLE IF NOT EXISTS schema_migrations (
+CREATE TABLE IF NOT EXISTS public.schema_migrations (
   id SERIAL PRIMARY KEY,
   migration_name TEXT UNIQUE NOT NULL,
   executed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -79,18 +90,28 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_schema_migrations_name 
-  ON schema_migrations(migration_name);
+  ON public.schema_migrations(migration_name);
 
 -- Create helper function to execute raw SQL
-CREATE OR REPLACE FUNCTION exec_migration_sql(sql_query TEXT)
+CREATE OR REPLACE FUNCTION public.exec_migration_sql(sql_query TEXT)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public
 AS $$
 BEGIN
   EXECUTE sql_query;
 END;
 $$;
+
+-- Raw migration SQL must never be callable through the public anon key.
+REVOKE ALL ON FUNCTION public.exec_migration_sql(TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.exec_migration_sql(TEXT) FROM anon;
+REVOKE ALL ON FUNCTION public.exec_migration_sql(TEXT) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.exec_migration_sql(TEXT) TO service_role;
+
+-- Make the new table/function visible to PostgREST immediately.
+NOTIFY pgrst, 'reload schema';
   `;
   
   console.log('📝 Please execute the following SQL in your Supabase SQL Editor:');

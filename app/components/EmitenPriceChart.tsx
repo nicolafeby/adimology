@@ -45,10 +45,11 @@ export default function EmitenPriceChart({ data, headerHeight, rowHeight }: Emit
 
   const minPrice = Math.min(...allPrices) * 0.98;
   const maxPrice = Math.max(...allPrices) * 1.02;
+  const chartHeight = headerHeight + (data.length * rowHeight);
 
   return (
-    <div style={{ width: '100%', height: `${headerHeight + (data.length * rowHeight)}px`, position: 'relative' }}>
-      <ResponsiveContainer width="100%" height="100%">
+    <div style={{ width: '100%', minWidth: 0, height: `${chartHeight}px`, minHeight: `${chartHeight}px`, position: 'relative' }}>
+      <ResponsiveContainer width="100%" height={chartHeight} minWidth={0} minHeight={chartHeight}>
         <ComposedChart
           layout="vertical"
           data={chartData}

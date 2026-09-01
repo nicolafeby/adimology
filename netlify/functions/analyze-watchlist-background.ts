@@ -1,4 +1,5 @@
 import { fetchWatchlist, fetchMarketDetector, fetchOrderbook, getTopBroker, fetchEmitenInfo, fetchHistoricalSummary } from '../../lib/stockbit';
+import { formatMarketDate } from '../../lib/date';
 import { calculateTargets } from '../../lib/calculations';
 import { 
   saveWatchlistAnalysis, 
@@ -16,7 +17,7 @@ export default async (req: Request) => {
 
   try {
     // Get current date for analysis
-    const today = new Date().toISOString().split('T')[0];
+    const today = formatMarketDate();
 
     // Fetch watchlist first to know total items
     const watchlistResponse = await fetchWatchlist();

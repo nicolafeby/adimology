@@ -3,6 +3,7 @@ import { fetchMarketDetector, fetchOrderbook, getTopBroker, parseLot, getBrokerS
 import { calculateTargets } from '@/lib/calculations';
 import { saveStockQuery, getLatestStockQuery, getSpecificStockQuery, getStockPriceByDate } from '@/lib/supabase';
 import type { StockInput, ApiResponse } from '@/lib/types';
+import { formatMarketDate } from '@/lib/date';
 
 export async function POST(request: NextRequest) {
   try {
@@ -18,7 +19,7 @@ export async function POST(request: NextRequest) {
     }
 
     const isSingleDate = fromDate === toDate;
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = formatMarketDate();
     const isToday = toDate === todayStr;
 
     // 2. Fetch data from both Stockbit APIs and emiten info

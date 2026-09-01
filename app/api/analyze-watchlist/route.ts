@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { formatMarketDate } from '@/lib/date';
 import { fetchWatchlist, fetchMarketDetector, fetchOrderbook, getTopBroker, fetchEmitenInfo, fetchHistoricalSummary } from '@/lib/stockbit';
 import { calculateTargets } from '@/lib/calculations';
 import { saveWatchlistAnalysis, updatePreviousDayRealPrice, getCachedWatchlistItems, getCachedWatchlistGroups } from '@/lib/supabase';
@@ -17,7 +18,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Get current date for analysis
-    const today = new Date().toISOString().split('T')[0];
+    const today = formatMarketDate();
 
     // Try to fetch watchlist from local cache first
     let watchlistItems: any[] = [];

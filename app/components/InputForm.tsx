@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import type { StockInput } from '@/lib/types';
 import { getDefaultDate } from '@/lib/utils';
+import { formatMarketDate, getMarketDateDaysAgo } from '@/lib/date';
 import { Check, X, Minus } from 'lucide-react';
 
 interface InputFormProps {
@@ -95,21 +96,7 @@ export default function InputForm({
   };
 
   const setDateRange = (days: number) => {
-    const end = new Date();
-    const start = new Date();
-
-    // If days is 0 (1D), it means just today for both
-    if (days === 0) {
-      // both are today, already default
-      // but maybe we want to force reset to today
-    } else {
-      start.setDate(end.getDate() - days);
-    }
-
-    // Format YYYY-MM-DD
-    const formatDate = (d: Date) => d.toISOString().split('T')[0];
-
-    onDateChange(formatDate(start), formatDate(end));
+    onDateChange(getMarketDateDaysAgo(days), formatMarketDate());
   };
 
   const handleFlag = async (flag: 'OK' | 'NG' | 'Neutral') => {

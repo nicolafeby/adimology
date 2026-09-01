@@ -1,20 +1,8 @@
 import React from 'react';
+import { formatMarketDate } from './date';
 
 export function getDefaultDate(): string {
-  const date = new Date();
-
-  // Broker summaries for the current trading day are not always published yet,
-  // so default to the most recent completed weekday.
-  date.setDate(date.getDate() - 1);
-  while (date.getDay() === 0 || date.getDay() === 6) {
-    date.setDate(date.getDate() - 1);
-  }
-
-  // Format in local time to avoid shifting the date around UTC boundaries.
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return formatMarketDate();
 }
 
 export function renderWithLinks(text: string | undefined): React.ReactNode {

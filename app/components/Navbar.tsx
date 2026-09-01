@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import TokenStatusIndicator from './TokenStatusIndicator';
 import JobStatusIndicator from './JobStatusIndicator';
 import StockbitFetchingIndicator from './StockbitFetchingIndicator';
+import GeminiStatusIndicator from './GeminiStatusIndicator';
 import ThemeToggle from './ThemeToggle';
 import PasswordSettingModal from './PasswordSettingModal';
 import { Github, Menu, X, Shield } from 'lucide-react';
@@ -103,6 +104,7 @@ const Navbar = () => {
             <StockbitFetchingIndicator />
             <JobStatusIndicator />
             <TokenStatusIndicator />
+            <GeminiStatusIndicator />
             <ThemeToggle />
             <button
               onClick={() => setIsPasswordModalOpen(true)}
@@ -202,6 +204,10 @@ const Navbar = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Stockbit Token</span>
               <TokenStatusIndicator />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Gemini API</span>
+              <GeminiStatusIndicator />
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Theme</span>

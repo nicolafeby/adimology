@@ -1394,6 +1394,15 @@ h3 {
   transform: translateY(-1px);
 }
 
+.status-indicator-container {
+  position: relative;
+}
+
+.status-pill-button {
+  color: inherit;
+  font-family: inherit;
+}
+
 .token-dot {
   width: 8px;
   height: 8px;
@@ -1499,6 +1508,26 @@ h3 {
   background: var(--accent-primary);
   color: white;
   border-color: transparent;
+}
+
+.token-popup-footer {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.token-popup-footer p {
+  margin: 0 0 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.gemini-model-name {
+  max-width: 165px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ===== Broker Flow Card ===== */

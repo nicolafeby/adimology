@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
              stockbitData: {
                bandar: historyData.bandar,
                barangBandar: historyData.barang_bandar,
-               rata_rata_bandar: historyData.rata_rata_bandar
+               rataRataBandar: historyData.rata_rata_bandar
              },
              marketData: {
                 harga: historyData.harga,
@@ -55,12 +55,12 @@ export async function POST(request: NextRequest) {
                 fraksi: historyData.fraksi
              },
              calculated: {
-                totalPapan: historyData.total_papan,
-                rata_rata_bid_ofer: historyData.rata_rata_bid_ofer,
-                a: historyData.a,
-                p: historyData.p,
-                target_realistis: historyData.target_realistis,
-                target_max: historyData.target_max
+               totalPapan: historyData.total_papan,
+               rataRataBidOfer: historyData.rata_rata_bid_ofer,
+               a: historyData.a,
+               p: historyData.p,
+               targetRealistis1: historyData.target_realistis,
+               targetMax: historyData.target_max
              },
              brokerSummary: null,
              isFromHistory: historyData.from_date !== fromDate || historyData.to_date !== toDate,

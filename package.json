@@ -2,6 +2,9 @@
   "name": "adimology",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "next dev",
     "migrate": "node scripts/run-migrations.js",
@@ -32,6 +35,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "netlify-cli": "^26.2.0",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5"

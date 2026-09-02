@@ -452,7 +452,9 @@ export default function Calculator({ selectedStock }: CalculatorProps) {
               <div style={{ flex: '1 1 0', minWidth: '400px', display: 'flex' }}>
                 <OrderbookCard
                   emiten={result.input.emiten}
+                  analysisDate={result.input.toDate}
                   marketData={result.marketData}
+                  calculated={result.calculated}
                   orderbook={result.orderbook}
                 />
               </div>

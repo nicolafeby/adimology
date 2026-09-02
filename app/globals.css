@@ -1975,6 +1975,97 @@ h3 {
   text-align: center;
 }
 
+.orderbook-historical {
+  padding: 0.4rem 0;
+}
+
+.orderbook-historical-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.65rem;
+}
+
+.orderbook-historical-heading > span {
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.orderbook-historical > p,
+.orderbook-formula-note {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  line-height: 1.55;
+}
+
+.orderbook-signal {
+  flex: 0 0 auto;
+  padding: 0.35rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+}
+
+.orderbook-signal.positive {
+  color: var(--sentiment-positive);
+  background: color-mix(in srgb, var(--sentiment-positive) 12%, transparent);
+}
+
+.orderbook-signal.negative {
+  color: var(--sentiment-negative);
+  background: color-mix(in srgb, var(--sentiment-negative) 12%, transparent);
+}
+
+.orderbook-signal.neutral {
+  color: var(--text-secondary);
+  background: var(--glass-inner-glow);
+}
+
+.orderbook-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin: 1rem 0;
+}
+
+.orderbook-metrics > div {
+  padding: 0.75rem;
+  border: 1px solid var(--glass-inner-glow);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.orderbook-metrics span,
+.orderbook-metrics strong {
+  display: block;
+}
+
+.orderbook-metrics span {
+  margin-bottom: 0.25rem;
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+}
+
+.orderbook-metrics strong {
+  color: var(--text-primary);
+  font-size: 0.75rem;
+}
+
+.orderbook-formula-note {
+  padding: 0.75rem;
+  border-left: 2px solid var(--accent-primary);
+  background: rgba(124, 58, 237, 0.06);
+  border-radius: 0 8px 8px 0;
+}
+
+.orderbook-formula-note strong {
+  color: var(--text-primary);
+}
+
 @media (max-width: 600px) {
   .orderbook-columns {
     grid-template-columns: 1fr;

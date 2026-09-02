@@ -435,6 +435,55 @@ export async function updatePreviousDayRealPrice(emiten: string, currentDate: st
 }
 
 /**
+ * Evaluate every pending signal for an emiten using the next available trading
+ * session. This makes the outcome deterministic across weekends and holidays
+ * and also backfills older rows when sufficient price history is supplied.
+ */
+export async function updatePendingRealPrices(
+  emiten: string,
+  prices: Array<{ date: string; close: number; high: number }>
+) {
+  const normalizedPrices = prices
+    .map(price => ({ ...price, marketDate: price.date.slice(0, 10) }))
+    .filter(price => Number.isFinite(price.close) && Number.isFinite(price.high))
+    .sort((a, b) => a.marketDate.localeCompare(b.marketDate));
+
+  if (normalizedPrices.length === 0) return [];
+
+  const { data: records, error: findError } = await supabase
+    .from('stock_queries')
+    .select('id, from_date')
+    .eq('emiten', emiten.toUpperCase())
+    .eq('status', 'success')
+    .is('max_harga', null)
+    .order('from_date', { ascending: true });
+
+  if (findError) {
+    console.error(`Error finding pending outcomes for ${emiten}:`, findError);
+    throw findError;
+  }
+
+  const updates = (records || []).flatMap(record => {
+    const nextSession = normalizedPrices.find(price => price.marketDate > record.from_date);
+    return nextSession ? [{ id: record.id, price: nextSession }] : [];
+  });
+
+  return Promise.all(updates.map(async ({ id, price }) => {
+    const { error } = await supabase
+      .from('stock_queries')
+      .update({ real_harga: price.close, max_harga: price.high })
+      .eq('id', id);
+
+    if (error) {
+      console.error(`Error evaluating stock query ${id} for ${emiten}:`, error);
+      throw error;
+    }
+
+    return id;
+  }));
+}
+
+/**
  * Create a new agent story record with pending status
  */
 export async function createAgentStory(emiten: string) {
@@ -717,7 +766,7 @@ export async function getEmitenSummaryStats(limit: number = 5) {
   // Since we don't know which emitens have recent data, we'll fetch a larger set first
   const { data, error } = await supabase
     .from('stock_queries')
-    .select('emiten, sector, target_realistis, target_max, max_harga, status, from_date, bandar')
+    .select('emiten, sector, target_realistis, target_max, max_harga, real_harga, status, from_date, bandar')
     .eq('status', 'success')
     .order('from_date', { ascending: false });
 
@@ -740,6 +789,8 @@ export async function getEmitenSummaryStats(limit: number = 5) {
   // 3. Calculate stats for each emiten
   const stats = Object.entries(emitenGroups).map(([emiten, records]) => {
     const tradingDays = records.length;
+    const evaluatedRecords = records.filter(r => r.max_harga != null || r.real_harga != null);
+    const evaluatedDays = evaluatedRecords.length;
     let hitR1 = 0;
     let hitMax = 0;
     const sector = records[0]?.sector; // Take sector from latest record
@@ -747,14 +798,18 @@ export async function getEmitenSummaryStats(limit: number = 5) {
     // Calculate bandar frequencies
     const bandarCounts: Record<string, number> = {};
     
-    records.forEach(r => {
-      if (r.max_harga && r.target_realistis && r.max_harga >= r.target_realistis) {
+    evaluatedRecords.forEach(r => {
+      // Prefer the intraday high, but keep close as a fallback for legacy rows.
+      const realizedPrice = r.max_harga ?? r.real_harga;
+      if (realizedPrice != null && r.target_realistis != null && realizedPrice >= r.target_realistis) {
         hitR1++;
       }
-      if (r.max_harga && r.target_max && r.max_harga >= r.target_max) {
+      if (realizedPrice != null && r.target_max != null && realizedPrice >= r.target_max) {
         hitMax++;
       }
-      
+    });
+
+    records.forEach(r => {
       if (r.bandar) {
         bandarCounts[r.bandar] = (bandarCounts[r.bandar] || 0) + 1;
       }
@@ -766,14 +821,17 @@ export async function getEmitenSummaryStats(limit: number = 5) {
       .slice(0, 3)
       .map(([name, count]) => ({ name, count }));
 
-    const hitRateR1 = (hitR1 / tradingDays) * 100;
-    const hitRateMax = (hitMax / tradingDays) * 100;
-    const totalHitRate = (hitRateR1 + hitRateMax) / 2;
+    const hitRateR1 = evaluatedDays > 0 ? (hitR1 / evaluatedDays) * 100 : null;
+    const hitRateMax = evaluatedDays > 0 ? (hitMax / evaluatedDays) * 100 : null;
+    const totalHitRate = hitRateR1 != null && hitRateMax != null
+      ? (hitRateR1 + hitRateMax) / 2
+      : null;
 
     return {
       emiten,
       sector,
       tradingDays,
+      evaluatedDays,
       hitR1,
       hitMax,
       hitRateR1,
@@ -784,7 +842,7 @@ export async function getEmitenSummaryStats(limit: number = 5) {
   });
 
   // 4. Sort by totalHitRate descending
-  return stats.sort((a, b) => b.totalHitRate - a.totalHitRate);
+  return stats.sort((a, b) => (b.totalHitRate ?? -1) - (a.totalHitRate ?? -1));
 }
 
 // ===== Watchlist Cache Functions =====

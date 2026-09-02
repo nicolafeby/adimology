@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { fetchMarketDetector, fetchOrderbook, getTopBroker, parseLot, getBrokerSummary, fetchEmitenInfo, fetchHistoricalSummary, fetchKeyStats } from '@/lib/stockbit';
 import { calculateTargets } from '@/lib/calculations';
 import { buildComprehensiveAnalysis } from '@/lib/analysis';
-import { saveStockQuery, getLatestStockQuery, getSpecificStockQuery, getStockPriceByDate, getRecentStockQueries, getLatestCompletedAgentStory } from '@/lib/supabase';
+import { saveStockQuery, updatePendingRealPrices, getLatestStockQuery, getSpecificStockQuery, getStockPriceByDate, getRecentStockQueries, getLatestCompletedAgentStory } from '@/lib/supabase';
 import type { StockInput, ApiResponse } from '@/lib/types';
 import { formatMarketDate } from '@/lib/date';
 
@@ -205,7 +205,7 @@ export async function POST(request: NextRequest) {
 
     // 4. Save to Supabase ONLY if Single Date Query
     if (isSingleDate) {
-      saveStockQuery({
+      await saveStockQuery({
         emiten,
         sector,
         from_date: fromDate,
@@ -225,7 +225,11 @@ export async function POST(request: NextRequest) {
         p: calculated.p,
         target_realistis: calculated.targetRealistis1,
         target_max: calculated.targetMax,
-      }).catch((err) => console.error('Failed to save to Supabase:', err));
+      });
+
+      // A price snapshot for this date evaluates the most recent earlier signal.
+      // This also covers records created through the manual stock analysis flow.
+      await updatePendingRealPrices(emiten, historicalData);
     }
 
     return NextResponse.json(result);

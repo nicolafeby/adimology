@@ -94,7 +94,7 @@ const Navbar = () => {
               Summary
             </Link>
             <a 
-              href="https://github.com/bhaktiutama/adimology" 
+              href="https://github.com/nicolafeby/adimology" 
               target="_blank" 
               rel="noopener noreferrer"
               style={{
@@ -198,7 +198,7 @@ const Navbar = () => {
               Summary
             </Link>
             <a 
-              href="https://github.com/bhaktiutama/adimology" 
+              href="https://github.com/nicolafeby/adimology" 
               target="_blank" 
               rel="noopener noreferrer"
               style={{

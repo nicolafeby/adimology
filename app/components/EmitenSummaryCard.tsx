@@ -7,11 +7,12 @@ interface SummaryRecord {
   emiten: string;
   sector?: string;
   tradingDays: number;
+  evaluatedDays: number;
   hitR1: number;
   hitMax: number;
-  hitRateR1: number;
-  hitRateMax: number;
-  totalHitRate: number;
+  hitRateR1: number | null;
+  hitRateMax: number | null;
+  totalHitRate: number | null;
   topBandars: { name: string; count: number }[];
 }
 
@@ -73,7 +74,7 @@ export default function EmitenSummaryCard() {
     }
   };
 
-  const formatPercent = (val: number) => `${val.toFixed(1)}%`;
+  const formatPercent = (val: number | null) => val == null ? 'Belum dinilai' : `${val.toFixed(1)}%`;
 
   const renderBandarCell = (bandarObj?: { name: string; count: number }) => {
     if (!bandarObj) return <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>-</span>;
@@ -139,7 +140,7 @@ export default function EmitenSummaryCard() {
             <thead style={{ background: 'var(--bg-secondary)', height: `${HEADER_HEIGHT}px`, borderBottom: '1px solid var(--border-color)' }}>
               <tr>
                 <th style={{ padding: '0 1rem', textAlign: 'left', fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Emiten</th>
-                <th style={{ padding: '0 1rem', textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Days</th>
+                <th title="Sudah dievaluasi / total data" style={{ padding: '0 1rem', textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Dinilai/Data</th>
                 <th style={{ padding: '0 1rem', textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Hit R1</th>
                 <th style={{ padding: '0 1rem', textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Hit Max</th>
                 <th style={{ padding: '0 1rem', textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600 }}>R1 Rate</th>
@@ -184,13 +185,15 @@ export default function EmitenSummaryCard() {
                     )}
                   </td>
                   <td style={{ padding: '0 1rem', textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-primary)' }}>
-                    {record.tradingDays}
+                    <span title={`${record.evaluatedDays} dari ${record.tradingDays} data sudah dievaluasi`}>
+                      {record.evaluatedDays}/{record.tradingDays}
+                    </span>
                   </td>
                   <td style={{ padding: '0 1rem', textAlign: 'center', fontSize: '0.85rem', color: 'var(--accent-success)' }}>
-                    {record.hitR1}
+                    {record.evaluatedDays > 0 ? record.hitR1 : '—'}
                   </td>
                   <td style={{ padding: '0 1rem', textAlign: 'center', fontSize: '0.85rem', color: 'var(--accent-warning)' }}>
-                    {record.hitMax}
+                    {record.evaluatedDays > 0 ? record.hitMax : '—'}
                   </td>
                   <td style={{ padding: '0 1rem', textAlign: 'center', fontSize: '0.85rem', color: 'var(--accent-success)' }}>
                     {formatPercent(record.hitRateR1)}

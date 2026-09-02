@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { formatMarketDate } from '@/lib/date';
 import { fetchWatchlist, fetchMarketDetector, fetchOrderbook, getTopBroker, fetchEmitenInfo, fetchHistoricalSummary } from '@/lib/stockbit';
 import { calculateTargets } from '@/lib/calculations';
-import { saveWatchlistAnalysis, updatePreviousDayRealPrice, getCachedWatchlistItems, getCachedWatchlistGroups } from '@/lib/supabase';
+import { saveWatchlistAnalysis, updatePendingRealPrices, getCachedWatchlistItems, getCachedWatchlistGroups } from '@/lib/supabase';
 
 export async function POST(request: NextRequest) {
   try {
@@ -124,13 +124,11 @@ export async function POST(request: NextRequest) {
         try {
           // Fetch yesterday's close and high from historical summary
           const yesterday = new Date();
-          yesterday.setDate(yesterday.getDate() - 7); // Look back 7 days to ensure we get data
-          const historicalData = await fetchHistoricalSummary(emiten, yesterday.toISOString().split('T')[0], today, 5);
+          yesterday.setDate(yesterday.getDate() - 45);
+          const historicalData = await fetchHistoricalSummary(emiten, yesterday.toISOString().split('T')[0], today, 40);
           
           if (historicalData.length > 0) {
-            // Get the most recent historical data (which is today's or latest available)
-            const latestData = historicalData[0];
-            await updatePreviousDayRealPrice(emiten, today, latestData.close, latestData.high);
+            await updatePendingRealPrices(emiten, historicalData);
           }
         } catch (updateError) {
           console.error(`Failed to update previous day real price for ${emiten}`, updateError);

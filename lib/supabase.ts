@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import type { IdxListedCompany } from './idx';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -347,7 +348,7 @@ export async function getRecentStockQueries(emiten: string, limit = 20) {
 export async function getLatestCompletedAgentStory(emiten: string) {
   const { data, error } = await supabase
     .from('agent_stories')
-    .select('matriks_story, kesimpulan, created_at')
+    .select('matriks_story, swot_analysis, kesimpulan, sources, created_at')
     .eq('emiten', emiten.toUpperCase())
     .eq('status', 'completed')
     .order('created_at', { ascending: false })
@@ -1017,4 +1018,219 @@ export async function deleteCachedWatchlistItem(watchlistId: number, symbol: str
   if (error) {
     console.error('Error deleting cached watchlist item:', error);
   }
+}
+
+// ===== Market screener, ranking, alerts, and signal evaluation =====
+
+export async function getActiveIdxUniverse(limit = 1000) {
+  const { data, error } = await getSupabaseAdmin()
+    .from('idx_universe')
+    .select('symbol, company_name, sector, board')
+    .eq('is_active', true)
+    .order('symbol')
+    .limit(limit);
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** Bootstrap the screener from emitens already synced from Stockbit watchlists. */
+export async function bootstrapIdxUniverseFromCache() {
+  const db = getSupabaseAdmin();
+  const { data: cached, error: cacheError } = await db.from('emiten_cache').select('symbol, name, sector');
+  if (cacheError) throw cacheError;
+  const rows = (cached ?? []).filter((row) => row.symbol).map((row) => ({
+    symbol: String(row.symbol).toUpperCase(), company_name: row.name || '', sector: row.sector || null,
+    board: null, is_active: true, updated_at: new Date().toISOString(),
+  }));
+  if (!rows.length) return [];
+  const { data, error } = await db.from('idx_universe').upsert(rows, { onConflict: 'symbol' }).select();
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function saveIdxUniverse(companies: IdxListedCompany[]) {
+  const rows = companies.map((company) => ({
+    symbol: company.KodeEmiten.toUpperCase(), company_name: company.NamaEmiten || '',
+    sector: company.Sektor || null, board: company.PapanPencatatan || null,
+    is_active: true, updated_at: new Date().toISOString(),
+  }));
+  const db = getSupabaseAdmin();
+  const saved: Array<{ symbol: string }> = [];
+  for (let index = 0; index < rows.length; index += 250) {
+    const { data, error } = await db.from('idx_universe').upsert(rows.slice(index, index + 250), { onConflict: 'symbol' }).select('symbol');
+    if (error) throw error;
+    saved.push(...(data ?? []));
+  }
+  return saved;
+}
+
+export async function ensureDefaultAlertRule() {
+  const db = getSupabaseAdmin();
+  const { count, error } = await db.from('alert_rules').select('*', { count: 'exact', head: true });
+  if (error) throw error;
+  if (count) return null;
+  const { data, error: insertError } = await db.from('alert_rules').insert({
+    name: 'Confirmed Uptrend', enabled: true, minimum_score: 70, minimum_probability: 0.6,
+    minimum_completeness: 75, allowed_signals: ['confirmed_uptrend'], cooldown_hours: 24,
+  }).select().single();
+  if (insertError) throw insertError;
+  return data;
+}
+
+export async function saveStockRankings(rows: Array<Record<string, unknown>>) {
+  if (!rows.length) return [];
+  const analysisDate = rows[0].analysis_date;
+  if (typeof analysisDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(analysisDate)) {
+    throw new Error('analysis_date ranking tidak valid');
+  }
+  if (rows.some((row) => row.analysis_date !== analysisDate)) {
+    throw new Error('Semua ranking dalam satu snapshot harus memiliki analysis_date yang sama');
+  }
+  const db = getSupabaseAdmin();
+  // A ranking run is a complete daily snapshot. Upsert the new snapshot first,
+  // then remove stale symbols so a failed insert cannot erase the prior result.
+  const { data, error } = await db
+    .from('stock_rankings')
+    .upsert(rows, { onConflict: 'analysis_date,symbol' })
+    .select();
+  if (error) throw error;
+  const symbols = rows.map((row) => String(row.symbol)).filter((symbol) => /^[A-Z0-9]{4,12}$/.test(symbol));
+  const { error: cleanupError } = await db.from('stock_rankings').delete().eq('analysis_date', analysisDate).not('symbol', 'in', `(${symbols.join(',')})`);
+  if (cleanupError) throw cleanupError;
+  return data ?? [];
+}
+
+export async function getStockRankings(date?: string, limit = 10) {
+  const db = getSupabaseAdmin();
+  let selectedDate = date;
+  if (!selectedDate) {
+    const { data: latest, error: latestError } = await db.from('stock_rankings').select('analysis_date').order('analysis_date', { ascending: false }).limit(1).maybeSingle();
+    if (latestError) throw latestError;
+    selectedDate = latest?.analysis_date;
+  }
+  if (!selectedDate) return [];
+  const query = db.from('stock_rankings').select('*').eq('analysis_date', selectedDate).order('rank').order('score', { ascending: false }).limit(Math.max(limit * 5, 100));
+  const { data, error } = await query;
+  if (error) throw error;
+  const uniqueRanks = new Map<number, (typeof data)[number]>();
+  for (const row of data ?? []) {
+    const reasons = Array.isArray(row.reasons) ? row.reasons : [];
+    const isAiV2 = reasons.some((reason: { label?: string; value?: string }) => reason.label === 'Scoring Model' && reason.value === 'multifactor-ai-v2')
+      && reasons.some((reason: { label?: string }) => reason.label === 'AI Story');
+    if (isAiV2 && !uniqueRanks.has(Number(row.rank))) uniqueRanks.set(Number(row.rank), row);
+  }
+  return [...uniqueRanks.values()].slice(0, limit);
+}
+
+export async function getStockRankingDetail(symbol: string, date?: string) {
+  const db = getSupabaseAdmin();
+  let rankingQuery = db.from('stock_rankings').select('*').eq('symbol', symbol.toUpperCase());
+  if (date) rankingQuery = rankingQuery.eq('analysis_date', date);
+  const [{ data: ranking, error: rankingError }, { data: story, error: storyError }] = await Promise.all([
+    rankingQuery.order('analysis_date', { ascending: false }).limit(1).maybeSingle(),
+    db.from('agent_stories').select('id, emiten, status, matriks_story, swot_analysis, checklist_katalis, keystat_signal, strategi_trading, kesimpulan, error_message, sources, created_at').eq('emiten', symbol.toUpperCase()).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+  ]);
+  if (rankingError) throw rankingError;
+  if (storyError) throw storyError;
+  return { ranking, story };
+}
+
+export async function saveSignalSnapshots(rows: Array<Record<string, unknown>>) {
+  if (!rows.length) return [];
+  const { data, error } = await getSupabaseAdmin()
+    .from('signal_snapshots')
+    .upsert(rows, { onConflict: 'signal_date,symbol,model_version' })
+    .select();
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function getPendingSignalSnapshots(limit = 100) {
+  const db = getSupabaseAdmin();
+  const { data: evaluated } = await db.from('signal_outcomes').select('snapshot_id');
+  const ids = (evaluated ?? []).map((row) => row.snapshot_id);
+  let query = db.from('signal_snapshots').select('*').lte('signal_date', new Date(Date.now() - 28 * 86400000).toISOString().slice(0, 10)).limit(limit);
+  if (ids.length) query = query.not('id', 'in', `(${ids.join(',')})`);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function saveSignalOutcome(row: Record<string, unknown>) {
+  const { data, error } = await getSupabaseAdmin().from('signal_outcomes').upsert(row, { onConflict: 'snapshot_id' }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function getBacktestRows() {
+  const db = getSupabaseAdmin();
+  const [{ data: outcomes, error: outcomeError }, { data: snapshots, error: snapshotError }] = await Promise.all([
+    db.from('signal_outcomes').select('*'),
+    db.from('signal_snapshots').select('id, score, signal, model_version, feature_snapshot'),
+  ]);
+  if (outcomeError) throw outcomeError;
+  if (snapshotError) throw snapshotError;
+  const snapshotMap = new Map((snapshots ?? []).map((row) => [row.id, row]));
+  return (outcomes ?? []).map((row) => {
+    const snapshot = snapshotMap.get(row.snapshot_id);
+    return { ...row, snapshot, model_probability: snapshot?.feature_snapshot?.model_probability ?? null };
+  });
+}
+
+export async function getCalibratedProbability(score: number): Promise<{ probability: number; sampleSize: number } | null> {
+  const db = getSupabaseAdmin();
+  const low = Math.floor(score / 10) * 10;
+  const { data, error } = await db.from('signal_snapshots').select('id').gte('score', low).lt('score', low + 10);
+  if (error || !data?.length) return null;
+  const ids = data.map((row) => row.id);
+  const { data: outcomes } = await db.from('signal_outcomes').select('return_10d').in('snapshot_id', ids).not('return_10d', 'is', null);
+  if (!outcomes || outcomes.length < 30) return null;
+  return { probability: outcomes.filter((row) => Number(row.return_10d) > 0).length / outcomes.length, sampleSize: outcomes.length };
+}
+
+export async function createMatchingAlertEvents(rankings: Array<{ id?: number; symbol: string; score: number; data_completeness: number; model_probability: number | null; signal: string }>) {
+  const db = getSupabaseAdmin();
+  const { data: rules, error } = await db.from('alert_rules').select('*').eq('enabled', true);
+  if (error) throw error;
+  const created = [];
+  for (const rule of rules ?? []) {
+    for (const ranking of rankings) {
+      const allowed = rule.allowed_signals ?? ['confirmed_uptrend'];
+      if (ranking.score < Number(rule.minimum_score ?? 70) || ranking.data_completeness < Number(rule.minimum_completeness ?? 75) || !allowed.includes(ranking.signal)) continue;
+      if (ranking.model_probability === null || ranking.model_probability < Number(rule.minimum_probability ?? 0.6)) continue;
+      const cooldownStart = new Date(Date.now() - Number(rule.cooldown_hours ?? 24) * 3600000).toISOString();
+      const { count } = await db.from('alert_events').select('*', { count: 'exact', head: true }).eq('rule_id', rule.id).eq('symbol', ranking.symbol).gte('created_at', cooldownStart);
+      if (count) continue;
+      const { data, error: insertError } = await db.from('alert_events').insert({ rule_id: rule.id, symbol: ranking.symbol, ranking_id: ranking.id ?? null, status: 'pending', payload: ranking }).select().single();
+      if (insertError) throw insertError;
+      created.push(data);
+    }
+  }
+  return created;
+}
+
+export async function getRecentAlertEvents(limit = 20) {
+  const { data, error } = await getSupabaseAdmin().from('alert_events').select('*').order('created_at', { ascending: false }).limit(limit);
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function saveStockQueriesForRanking(results: Array<{
+  symbol: string; sector?: string; brokerData: { bandar: string; barangBandar: number; rataRataBandar: number };
+  lastPrice: number; ara: number; arb: number; totalBid: number; totalOffer: number;
+  targets: { fraksi: number; totalPapan: number; rataRataBidOfer: number; a: number; p: number; targetRealistis1: number; targetMax: number };
+}>, date: string) {
+  if (!results.length) return [];
+  const rows = results.map((result) => ({
+    from_date: date, to_date: date, emiten: result.symbol, sector: result.sector,
+    bandar: result.brokerData.bandar, barang_bandar: result.brokerData.barangBandar,
+    rata_rata_bandar: result.brokerData.rataRataBandar, harga: result.lastPrice,
+    ara: result.ara, arb: result.arb, total_bid: result.totalBid, total_offer: result.totalOffer,
+    fraksi: result.targets.fraksi, total_papan: result.targets.totalPapan,
+    rata_rata_bid_ofer: result.targets.rataRataBidOfer, a: result.targets.a, p: result.targets.p,
+    target_realistis: result.targets.targetRealistis1, target_max: result.targets.targetMax, status: 'success',
+  }));
+  const { data, error } = await getSupabaseAdmin().from('stock_queries').upsert(rows, { onConflict: 'from_date,emiten' }).select();
+  if (error) throw error;
+  return data ?? [];
 }

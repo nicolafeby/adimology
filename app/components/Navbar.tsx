@@ -41,7 +41,7 @@ const Navbar = () => {
         {/* Desktop View */}
         <div className="nav-desktop-actions">
           <div className="nav-links">
-            <Link 
+            <Link
               href="/" 
               style={{
                 textDecoration: 'none',
@@ -55,7 +55,17 @@ const Navbar = () => {
             >
               Calculator
             </Link>
-            <Link 
+            <Link
+              href="/rankings"
+              style={{
+                textDecoration: 'none', color: pathname === '/rankings' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                fontWeight: pathname === '/rankings' ? 600 : 400, fontSize: '0.9rem',
+                borderBottom: pathname === '/rankings' ? '2px solid var(--accent-primary)' : '2px solid transparent', paddingBottom: '2px'
+              }}
+            >
+              Top 10
+            </Link>
+            <Link
               href="/history" 
               style={{
                 textDecoration: 'none',
@@ -69,7 +79,7 @@ const Navbar = () => {
             >
               History
             </Link>
-            <Link 
+            <Link
               href="/summary" 
               style={{
                 textDecoration: 'none',
@@ -153,6 +163,13 @@ const Navbar = () => {
               Calculator
             </Link>
             <Link 
+              href="/rankings"
+              onClick={() => setIsMenuOpen(false)}
+              style={{ textDecoration: 'none', color: pathname === '/rankings' ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: pathname === '/rankings' ? 600 : 400, fontSize: '1rem', padding: '0.5rem 0' }}
+            >
+              Top 10
+            </Link>
+            <Link
               href="/history" 
               onClick={() => setIsMenuOpen(false)}
               style={{

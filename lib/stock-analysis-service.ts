@@ -1,0 +1,45 @@
+import { buildComprehensiveAnalysis } from './analysis';
+import { calculateTargets } from './calculations';
+import { getLatestCompletedAgentStory, getRecentStockQueries } from './supabase';
+import { fetchEmitenInfo, fetchHistoricalSummary, fetchKeyStats, fetchMarketDetector, fetchOrderbook, getBrokerSummary, getTopBroker, parseLot } from './stockbit';
+
+export async function analyzeSymbol(symbol: string, analysisDate: string) {
+  const emiten = symbol.trim().toUpperCase();
+  const start = new Date(`${analysisDate}T00:00:00Z`);
+  start.setUTCDate(start.getUTCDate() - 140);
+  const historyStart = start.toISOString().slice(0, 10);
+  const detectorStartDate = new Date(`${analysisDate}T00:00:00Z`);
+  detectorStartDate.setUTCDate(detectorStartDate.getUTCDate() - 28);
+  const detectorStart = detectorStartDate.toISOString().slice(0, 10);
+  const [detector, orderbookResponse, info, history, keyStats, benchmark, brokerHistory, catalyst] = await Promise.all([
+    fetchMarketDetector(emiten, detectorStart, analysisDate),
+    fetchOrderbook(emiten),
+    fetchEmitenInfo(emiten).catch(() => null),
+    fetchHistoricalSummary(emiten, historyStart, analysisDate, 100).catch(() => []),
+    fetchKeyStats(emiten).catch(() => undefined),
+    fetchHistoricalSummary('COMPOSITE', historyStart, analysisDate, 100).catch(() => []),
+    getRecentStockQueries(emiten).catch(() => []),
+    getLatestCompletedAgentStory(emiten).catch(() => null),
+  ]);
+  const topBroker = getTopBroker(detector);
+  const brokerSummary = getBrokerSummary(detector);
+  const raw = orderbookResponse.data || (orderbookResponse as never);
+  const ob = raw as typeof orderbookResponse.data;
+  if (!ob?.total_bid_offer || ob.close === undefined) throw new Error('Struktur orderbook tidak valid');
+  const toLevel = (row: { price: string; volume: string; que_num: string; change_percentage: string }) => ({ price: Number(row.price), volume: parseLot(row.volume), queues: parseLot(row.que_num), changePercentage: Number(row.change_percentage || 0) });
+  const orderbook = { bid: (ob.bid ?? []).slice(0, 10).map(toLevel), offer: (ob.offer ?? []).slice(0, 10).map(toLevel) };
+  const lastPrice = Number(ob.close);
+  // The top-buyer list can be empty even when price/orderbook/technical feeds are
+  // valid. Keep legacy target fields safe without dropping the stock entirely.
+  const brokerData = topBroker ?? { bandar: '-', barangBandar: 0, rataRataBandar: lastPrice };
+  const offerPrices = (ob.offer ?? []).map((row) => Number(row.price));
+  const bidPrices = (ob.bid ?? []).map((row) => Number(row.price));
+  const ara = Number(ob.ara?.value ?? ob.ara) > lastPrice ? Number(ob.ara?.value ?? ob.ara) : Math.max(...offerPrices, Number(ob.high || 0));
+  const arbRaw = Number(ob.arb?.value ?? ob.arb);
+  const arb = arbRaw > 0 && arbRaw < lastPrice ? arbRaw : bidPrices.length ? Math.min(...bidPrices) : 0;
+  const totalBid = parseLot(ob.total_bid_offer.bid.lot);
+  const totalOffer = parseLot(ob.total_bid_offer.offer.lot);
+  const targets = calculateTargets(brokerData.rataRataBandar, brokerData.barangBandar, ara, arb, totalBid / 100, totalOffer / 100, lastPrice);
+  const analysis = buildComprehensiveAnalysis({ brokerSummary, orderbook, lastPrice, history, keyStats, benchmarkHistory: benchmark, brokerHistory, catalyst });
+  return { symbol: emiten, sector: info?.data?.sector, brokerData, brokerSummary, orderbook, history, lastPrice, ara, arb, totalBid, totalOffer, targets, analysis, catalyst };
+}

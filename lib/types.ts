@@ -130,12 +130,50 @@ export interface AnalysisComponent {
 
 export interface ComprehensiveAnalysis {
   score: number;
+  /** Percentage of weighted inputs that were available. */
+  dataCompleteness: number;
+  /** @deprecated Use dataCompleteness. Kept for older clients. */
   confidence: number;
   label: 'Kuat' | 'Positif' | 'Netral' | 'Hati-hati' | 'Lemah';
   horizon: string;
   generatedAt: string;
   components: AnalysisComponent[];
   warnings: string[];
+}
+
+export type TrendSignal = 'early_uptrend' | 'confirmed_uptrend' | 'watch' | 'avoid';
+
+export interface RankingReason {
+  label: string;
+  value: string;
+  positive: boolean;
+}
+
+export interface StockRanking {
+  id?: number;
+  analysis_date: string;
+  symbol: string;
+  rank: number;
+  score: number;
+  data_completeness: number;
+  model_probability: number | null;
+  signal: TrendSignal;
+  last_price: number;
+  reasons: RankingReason[];
+  risk_flags: string[];
+  components: AnalysisComponent[];
+  created_at?: string;
+}
+
+export interface BacktestSummary {
+  sampleSize: number;
+  winRate5d: number | null;
+  winRate10d: number | null;
+  winRate20d: number | null;
+  averageReturn10d: number | null;
+  targetHitRate: number | null;
+  stopHitRate: number | null;
+  brierScore: number | null;
 }
 
 export interface CalculatedData {
@@ -276,6 +314,17 @@ export interface SwotAnalysis {
   weaknesses: string[];
   opportunities: string[];
   threats: string[];
+  ai_scoring?: AiStoryScoring;
+}
+
+export interface AiStoryScoring {
+  model?: string;
+  score: number;
+  confidence: number;
+  sentiment: 'positive' | 'neutral' | 'negative';
+  rationale: string;
+  positive_catalysts: string[];
+  negative_risks: string[];
 }
 
 export interface ChecklistKatalis {

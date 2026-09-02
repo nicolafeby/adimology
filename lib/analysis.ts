@@ -6,6 +6,7 @@ import type {
   KeyStatsData,
   OrderbookSnapshot,
 } from './types';
+import type { AiStoryScoring } from './types';
 import type { HistoricalSummaryItem } from './stockbit';
 
 const clamp = (value: number, min = 0, max = 100) => Math.min(max, Math.max(min, value));
@@ -187,17 +188,17 @@ export function buildComprehensiveAnalysis(input: {
   keyStats?: KeyStatsData;
   brokerHistory?: BrokerHistoryRow[];
   benchmarkHistory?: HistoricalSummaryItem[];
-  catalyst?: { matriks_story?: Array<{ potensi_dampak_harga?: string }>; kesimpulan?: string; created_at?: string } | null;
+  catalyst?: { matriks_story?: Array<{ potensi_dampak_harga?: string }>; kesimpulan?: string; swot_analysis?: { ai_scoring?: AiStoryScoring }; created_at?: string } | null;
 }): ComprehensiveAnalysis {
   const benchmark = technicalComponent(input.benchmarkHistory ?? []);
-  const catalystText = [input.catalyst?.kesimpulan, ...(input.catalyst?.matriks_story ?? []).map((x) => x.potensi_dampak_harga)].filter(Boolean).join(' ').toLowerCase();
-  const positiveCatalyst = (catalystText.match(/positif|baik|meningkat|peluang/g) ?? []).length;
-  const negativeCatalyst = (catalystText.match(/negatif|risiko|turun|buruk/g) ?? []).length;
-  const catalystComponent: AnalysisComponent = input.catalyst ? {
+  const aiScoring = input.catalyst?.swot_analysis?.ai_scoring;
+  const catalystComponent: AnalysisComponent = aiScoring ? {
     key: 'catalyst', label: 'Katalis & Kepemilikan', weight: 10,
-    score: Math.round(clamp(50 + (positiveCatalyst - negativeCatalyst) * 6)), available: true,
+    score: Math.round(clamp(aiScoring.score)), available: true,
     metrics: [
-      metric('storySentiment', 'Sentimen Katalis', positiveCatalyst > negativeCatalyst ? 'Positif' : negativeCatalyst > positiveCatalyst ? 'Negatif' : 'Netral', positiveCatalyst > negativeCatalyst ? 'positive' : negativeCatalyst > positiveCatalyst ? 'negative' : 'neutral', 'Ekstraksi konservatif dari analisis story terakhir.'),
+      metric('storySentiment', 'Sentimen AI', aiScoring.sentiment === 'positive' ? 'Positif' : aiScoring.sentiment === 'negative' ? 'Negatif' : 'Netral', aiScoring.sentiment === 'positive' ? 'positive' : aiScoring.sentiment === 'negative' ? 'negative' : 'neutral', aiScoring.rationale),
+      metric('aiStoryScore', 'AI Story Score', Math.round(clamp(aiScoring.score)), aiScoring.score >= 60 ? 'positive' : aiScoring.score < 45 ? 'negative' : 'neutral', aiScoring.rationale, '/100'),
+      metric('aiStoryConfidence', 'AI Confidence', Math.round(clamp(aiScoring.confidence)), aiScoring.confidence >= 70 ? 'positive' : aiScoring.confidence < 50 ? 'negative' : 'neutral', 'Keyakinan AI berdasarkan kecukupan dan konsistensi sumber berita.', '%'),
       metric('ownership', 'Perubahan Kepemilikan', null, 'unavailable', 'Feed ownership terstruktur belum tersedia.'),
     ],
   } : { key: 'catalyst', label: 'Katalis & Kepemilikan', weight: 10, score: null, available: false, metrics: [] };
@@ -217,11 +218,11 @@ export function buildComprehensiveAnalysis(input: {
   const score = availableWeight > 0
     ? Math.round(available.reduce((sum, x) => sum + (x.score ?? 0) * x.weight, 0) / availableWeight)
     : 50;
-  const confidence = Math.round((availableWeight / components.reduce((sum, x) => sum + x.weight, 0)) * 100);
+  const dataCompleteness = Math.round((availableWeight / components.reduce((sum, x) => sum + x.weight, 0)) * 100);
   const label: ComprehensiveAnalysis['label'] = score >= 75 ? 'Kuat' : score >= 60 ? 'Positif' : score >= 45 ? 'Netral' : score >= 30 ? 'Hati-hati' : 'Lemah';
   const missing = components.filter((x) => !x.available).map((x) => x.label);
   return {
-    score, confidence, label, horizon: 'Swing 5–20 hari', generatedAt: new Date().toISOString(), components,
+    score, dataCompleteness, confidence: dataCompleteness, label, horizon: 'Swing 5–20 hari', generatedAt: new Date().toISOString(), components,
     warnings: missing.length ? [`Komponen belum tersedia dan tidak dihitung: ${missing.join(', ')}.`] : [],
   };
 }

@@ -1,18 +1,20 @@
 import { NextResponse } from 'next/server';
-
-const GEMINI_MODEL = 'gemini-3-flash-preview';
+import { getGeminiStoryModels } from '@/lib/gemini-models';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const apiKey = process.env.GEMINI_API_KEY;
+  const models = getGeminiStoryModels();
+  const primaryModel = models[0];
   const checkedAt = new Date().toISOString();
 
   if (!apiKey) {
     return NextResponse.json({
       configured: false,
       connected: false,
-      model: GEMINI_MODEL,
+      model: primaryModel,
+      models,
       checkedAt,
       message: 'GEMINI_API_KEY is not configured.',
     });
@@ -21,7 +23,7 @@ export async function GET() {
   try {
     // Reading model metadata verifies the key without generating content or using tokens.
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${primaryModel}`,
       {
         headers: { 'x-goog-api-key': apiKey },
         cache: 'no-store',
@@ -32,7 +34,8 @@ export async function GET() {
       return NextResponse.json({
         configured: true,
         connected: false,
-        model: GEMINI_MODEL,
+        model: primaryModel,
+        models,
         checkedAt,
         message:
           response.status === 401 || response.status === 403
@@ -44,7 +47,8 @@ export async function GET() {
     return NextResponse.json({
       configured: true,
       connected: true,
-      model: GEMINI_MODEL,
+      model: primaryModel,
+      models,
       checkedAt,
       message: 'Gemini API is ready for analysis.',
     });
@@ -53,7 +57,8 @@ export async function GET() {
     return NextResponse.json({
       configured: true,
       connected: false,
-      model: GEMINI_MODEL,
+      model: primaryModel,
+      models,
       checkedAt,
       message: 'Unable to reach the Gemini API.',
     });

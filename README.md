@@ -134,6 +134,7 @@ Opsi ini cocok untuk pengembangan atau jika Anda hanya ingin menjalankan aplikas
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ | ✅ | Anon key Supabase |
 | `CRON_SECRET` | ✅ | ❌ | Secret untuk scheduled functions |
 | `GEMINI_API_KEY` | ✅ | ✅ | API Key Google AI Studio |
+| `GEMINI_STORY_MODELS` | ⚠️ | ⚠️ | Urutan model AI Story dipisahkan koma. Default: `gemini-3.5-flash-lite,gemini-3.6-flash,gemini-3-flash-preview` |
 | `STOCKBIT_JWT_TOKEN` | ❌ | ⚠️ | Fallback token manual |
 
 ---

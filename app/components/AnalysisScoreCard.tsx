@@ -7,6 +7,7 @@ const formatMetric = (value: number | string | null, unit?: string) => {
 };
 
 export default function AnalysisScoreCard({ analysis }: { analysis: ComprehensiveAnalysis }) {
+  const completeness = analysis.dataCompleteness ?? analysis.confidence;
   return (
     <section className="analysis-score-card">
       <div className="analysis-score-header">
@@ -14,8 +15,8 @@ export default function AnalysisScoreCard({ analysis }: { analysis: Comprehensiv
         <div className="analysis-score-gauge" aria-label={`Skor ${analysis.score} dari 100`}><strong>{analysis.score}</strong><span>/100</span></div>
       </div>
       <div className="analysis-confidence">
-        <span>Confidence / kelengkapan data</span><strong>{analysis.confidence}%</strong>
-        <div><i style={{ width: `${analysis.confidence}%` }} /></div>
+        <span>Kelengkapan data</span><strong>{completeness}%</strong>
+        <div><i style={{ width: `${completeness}%` }} /></div>
       </div>
       <div className="analysis-components">
         {analysis.components.map((component) => (

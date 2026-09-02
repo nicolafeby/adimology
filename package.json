@@ -38,6 +38,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "netlify-cli": "^26.2.0",
+    "pm2": "^7.0.4",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5"

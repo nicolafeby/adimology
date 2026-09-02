@@ -71,7 +71,7 @@ jobs:
 
       - name: Check port on first deployment
         run: |
-          if ! pm2 describe adimology >/dev/null 2>&1; then
+          if ! npx --no-install pm2 describe adimology >/dev/null 2>&1; then
             APP_PORT="$APP_PORT" node <<'NODE'
           const net = require('node:net');
           const port = Number(process.env.APP_PORT);
@@ -127,5 +127,5 @@ jobs:
           RELEASE_PATH: ${{ steps.release.outputs.release_path }}
         run: |
           ln -sfn "$RELEASE_PATH" "$DEPLOY_PATH/current"
-          pm2 startOrReload deploy/ecosystem.config.cjs --update-env
-          pm2 save
+          npx --no-install pm2 startOrReload deploy/ecosystem.config.cjs --update-env
+          npx --no-install pm2 save

@@ -1,6 +1,6 @@
 # Deploy ke Home Server dengan GitHub Actions
 
-Deployment ini menggunakan GitHub Actions self-hosted runner dan PM2. Setiap push ke `main` akan menjalankan test, typecheck, build standalone, membuat release baru, lalu me-reload aplikasi.
+Deployment ini menggunakan GitHub Actions self-hosted runner dan PM2. PM2 tersedia sebagai dependency proyek agar workflow tidak bergantung pada PATH interaktif/NVM server. Setiap push ke `main` akan menjalankan test, typecheck, build standalone, membuat release baru, lalu me-reload aplikasi.
 
 ## 1. Persiapan server
 

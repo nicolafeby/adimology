@@ -100,6 +100,11 @@ async function fetchFromStockbitAndCache(groupId?: number) {
   const items = watchlistData.data?.result || [];
 
   if (items.length === 0) {
+    const actualGroupId = groupId || watchlistData.data?.watchlist_id;
+    if (actualGroupId) {
+      await saveCachedWatchlistItems(actualGroupId, []);
+    }
+
     return NextResponse.json({
       success: true,
       data: watchlistData,

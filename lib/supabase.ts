@@ -1027,7 +1027,7 @@ export async function saveCachedWatchlistItems(
       throw emitenError;
     }
 
-    // Associate with group
+    // Build associations for the selected group.
     const watchlistRows = items.map((item: any) => ({
       watchlist_group_id: group.id,
       stockbit_item_id: String(item.id || ''),
@@ -1035,17 +1035,26 @@ export async function saveCachedWatchlistItems(
       symbol: (item.symbol || item.company_code || '').toUpperCase(),
     }));
 
-    // Reset items for this group and insert new associations
-    await supabase.from('watchlist_items').delete().eq('watchlist_group_id', group.id);
-
     const { error: itemsError } = await supabase
       .from('watchlist_items')
-      .insert(watchlistRows);
+      .delete()
+      .eq('watchlist_group_id', group.id);
 
-    if (itemsError) {
-      console.error('Error saving cached watchlist items:', itemsError);
-      throw itemsError;
+    if (itemsError) throw itemsError;
+
+    const { error: insertError } = await supabase.from('watchlist_items').insert(watchlistRows);
+    if (insertError) {
+      console.error('Error saving cached watchlist items:', insertError);
+      throw insertError;
     }
+  } else {
+    // An empty Stockbit watchlist must also clear previously cached items.
+    const { error: itemsError } = await supabase
+      .from('watchlist_items')
+      .delete()
+      .eq('watchlist_group_id', group.id);
+
+    if (itemsError) throw itemsError;
   }
 
   // Update group synced_at

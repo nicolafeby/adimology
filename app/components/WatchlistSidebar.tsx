@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import type { WatchlistItem, WatchlistGroup } from '@/lib/types';
 import { CheckCircle2, XCircle, MinusCircle, Search, Filter, X, RefreshCw } from 'lucide-react';
 
@@ -17,6 +17,7 @@ export default function WatchlistSidebar({ onSelect }: WatchlistSidebarProps) {
   const [refreshSeed, setRefreshSeed] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
+  const syncInProgressRef = useRef(false);
 
   // Filter States
   const [filterEmiten, setFilterEmiten] = useState('');
@@ -102,22 +103,17 @@ export default function WatchlistSidebar({ onSelect }: WatchlistSidebarProps) {
     fetchWatchlistItems();
   }, [selectedGroupId, refreshSeed]);
 
-  // Handle token refresh event
-  useEffect(() => {
-    const handleTokenRefresh = () => {
-      console.log('Token refreshed event received, triggering watchlist sync');
-      handleSync();
-    };
-
-    window.addEventListener('token-refreshed', handleTokenRefresh);
-    return () => window.removeEventListener('token-refreshed', handleTokenRefresh);
-  }, [selectedGroupId]);
-
   // Sync from Stockbit
-  const handleSync = async () => {
-    window.dispatchEvent(new CustomEvent('stockbit-fetch-start'));
-    setSyncing(true);
-    setError(null);
+  const handleSync = useCallback(async (silent = false) => {
+    if (syncInProgressRef.current) return;
+
+    syncInProgressRef.current = true;
+    if (!silent) {
+      window.dispatchEvent(new CustomEvent('stockbit-fetch-start'));
+      setSyncing(true);
+      setError(null);
+    }
+
     try {
       // Sync groups
       const groupsRes = await fetch('/api/watchlist/groups?sync=true');
@@ -142,12 +138,50 @@ export default function WatchlistSidebar({ onSelect }: WatchlistSidebarProps) {
       }
     } catch (err) {
       console.error('Error syncing watchlist:', err);
-      setError('Sync failed. Showing cached data.');
+      if (!silent) setError('Sync failed. Showing cached data.');
     } finally {
-      setSyncing(false);
-      window.dispatchEvent(new CustomEvent('stockbit-fetch-end'));
+      syncInProgressRef.current = false;
+      if (!silent) {
+        setSyncing(false);
+        window.dispatchEvent(new CustomEvent('stockbit-fetch-end'));
+      }
     }
-  };
+  }, [selectedGroupId]);
+
+  // Keep the Stockbit-backed cache fresh without requiring a page reload.
+  // Sync only while the page is visible to avoid unnecessary API traffic.
+  useEffect(() => {
+    const AUTO_SYNC_INTERVAL_MS = 30_000;
+
+    const syncWhenVisible = () => {
+      if (document.visibilityState === 'visible' && navigator.onLine) {
+        void handleSync(true);
+      }
+    };
+
+    const intervalId = window.setInterval(syncWhenVisible, AUTO_SYNC_INTERVAL_MS);
+    document.addEventListener('visibilitychange', syncWhenVisible);
+    window.addEventListener('focus', syncWhenVisible);
+    window.addEventListener('online', syncWhenVisible);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', syncWhenVisible);
+      window.removeEventListener('focus', syncWhenVisible);
+      window.removeEventListener('online', syncWhenVisible);
+    };
+  }, [handleSync]);
+
+  // Handle token refresh event
+  useEffect(() => {
+    const handleTokenRefresh = () => {
+      console.log('Token refreshed event received, triggering watchlist sync');
+      void handleSync();
+    };
+
+    window.addEventListener('token-refreshed', handleTokenRefresh);
+    return () => window.removeEventListener('token-refreshed', handleTokenRefresh);
+  }, [handleSync]);
 
   // Format relative time for synced_at
   const formatSyncedAt = (iso: string | null) => {
@@ -292,7 +326,7 @@ export default function WatchlistSidebar({ onSelect }: WatchlistSidebarProps) {
           </h3>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <button 
-              onClick={handleSync}
+              onClick={() => void handleSync()}
               disabled={syncing}
               style={{
                 background: 'transparent',

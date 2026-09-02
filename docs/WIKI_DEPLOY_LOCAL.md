@@ -60,26 +60,9 @@ npm run dev
 
 Aplikasi akan berjalan di [http://localhost:3000](http://localhost:3000)
 
-## B3.5. Menjalankan Netlify Functions Lokal (Wajib untuk AI)
+## B3.5. Background job lokal
 
-Fitur analisis AI (Story Analysis) menggunakan Netlify Functions. Untuk menjalankannya secara lokal:
-
-1. Install Netlify CLI secara global:
-   ```bash
-   npm install -g netlify-cli
-   ```
-
-2. Jalankan Netlify Functions pada port 8888 (buka terminal baru):
-   ```bash
-   netlify functions:serve --port 8888
-   ```
-
-3. Validasi bahwa function berikut berhasil dimuat di terminal:
-   - `analyze-watchlist`
-   - `analyze-watchlist-background`
-   - `analyze-story-background`
-
-   > **Note**: Biarkan terminal ini tetap berjalan berdampingan dengan terminal aplikasi utama (`npm run dev`).
+AI Story dan retry screener dijalankan langsung oleh server Next.js. Tidak diperlukan Netlify CLI, akun Netlify, atau service tambahan di port `8888`.
 
 ## B4. Setup Chrome Extension (untuk Lokal)
 

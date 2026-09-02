@@ -1,5 +1,6 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { createAgentStory, getAgentStoriesByEmiten, updateAgentStory } from '@/lib/supabase';
+import { after, NextRequest, NextResponse } from 'next/server';
+import { createAgentStory, getAgentStoriesByEmiten } from '@/lib/supabase';
+import { runStoryBackgroundJob } from '@/lib/background-jobs';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -46,35 +47,7 @@ export async function POST(request: NextRequest) {
     // Create pending record
     const story = await createAgentStory(emiten);
 
-    // Trigger background function
-    const configuredFunctionsUrl = process.env.NETLIFY_FUNCTIONS_URL?.trim();
-    const baseUrl = configuredFunctionsUrl
-      || (process.env.NODE_ENV === 'development'
-        ? 'http://localhost:8888'
-        : process.env.URL || request.nextUrl.origin);
-
-    const functionUrl = baseUrl.includes('/.netlify/functions') 
-      ? baseUrl 
-      : `${baseUrl.replace(/\/$/, '')}/.netlify/functions`;
-
-
-    console.log(`[Agent Story] Triggering background function at: ${functionUrl}/analyze-story-background`);
-
-    try {
-      const backgroundResponse = await fetch(`${functionUrl}/analyze-story-background?emiten=${encodeURIComponent(emiten)}&id=${story.id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keyStats })
-      });
-      if (!backgroundResponse.ok) {
-        const details = await backgroundResponse.text();
-        throw new Error(`Background function returned ${backgroundResponse.status}: ${details.slice(0, 300)}`);
-      }
-    } catch (triggerError) {
-      const message = triggerError instanceof Error ? triggerError.message : 'Failed to trigger background function';
-      await updateAgentStory(story.id, { status: 'error', error_message: message }).catch(() => undefined);
-      throw triggerError;
-    }
+    after(() => runStoryBackgroundJob(story.id, emiten, keyStats));
 
     return NextResponse.json({ 
       success: true, 

@@ -39,6 +39,7 @@ jobs:
           cp ../docs/Home.md ./Home.md
           cp ../docs/WIKI_DEPLOY_CLOUD.md ./Deploy-Cloud.md
           cp ../docs/WIKI_DEPLOY_LOCAL.md ./Deploy-Local.md
+          cp ../docs/WIKI_DEPLOY_HOME_SERVER.md ./Deploy-Home-Server.md
           cp ../docs/CHECKPOINT.md ./Checkpoint.md
           cp ../docs/WIKI_RESET_PASSWORD.md ./Reset-Password.md
           
@@ -49,5 +50,4 @@ jobs:
             git commit -m "Sync wiki from docs/ via GitHub Actions"
             git push origin master || git push origin main
           fi
-
 

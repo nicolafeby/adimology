@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createAgentStory, getAgentStoriesByEmiten } from '@/lib/supabase';
+import { createAgentStory, getAgentStoriesByEmiten, updateAgentStory } from '@/lib/supabase';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -17,13 +17,13 @@ export async function GET(request: NextRequest) {
         success: true, 
         data: null,
         message: 'No analysis found'
-      });
+      }, { headers: { 'Cache-Control': 'no-store, max-age=0' } });
     }
 
     return NextResponse.json({ 
       success: true, 
       data: stories 
-    });
+    }, { headers: { 'Cache-Control': 'no-store, max-age=0' } });
   } catch (error) {
     console.error('Error fetching agent story:', error);
     return NextResponse.json({ 
@@ -60,12 +60,21 @@ export async function POST(request: NextRequest) {
 
     console.log(`[Agent Story] Triggering background function at: ${functionUrl}/analyze-story-background`);
 
-    // Fire and forget - don't await
-    fetch(`${functionUrl}/analyze-story-background?emiten=${emiten}&id=${story.id}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keyStats })
-    }).catch(err => console.error('Failed to trigger background function:', err));
+    try {
+      const backgroundResponse = await fetch(`${functionUrl}/analyze-story-background?emiten=${encodeURIComponent(emiten)}&id=${story.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keyStats })
+      });
+      if (!backgroundResponse.ok) {
+        const details = await backgroundResponse.text();
+        throw new Error(`Background function returned ${backgroundResponse.status}: ${details.slice(0, 300)}`);
+      }
+    } catch (triggerError) {
+      const message = triggerError instanceof Error ? triggerError.message : 'Failed to trigger background function';
+      await updateAgentStory(story.id, { status: 'error', error_message: message }).catch(() => undefined);
+      throw triggerError;
+    }
 
     return NextResponse.json({ 
       success: true, 

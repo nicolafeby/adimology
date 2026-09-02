@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { fetchMarketDetector, fetchOrderbook, getTopBroker, parseLot, getBrokerSummary, fetchEmitenInfo } from '@/lib/stockbit';
+import { fetchMarketDetector, fetchOrderbook, getTopBroker, parseLot, getBrokerSummary, fetchEmitenInfo, fetchHistoricalSummary, fetchKeyStats } from '@/lib/stockbit';
 import { calculateTargets } from '@/lib/calculations';
-import { saveStockQuery, getLatestStockQuery, getSpecificStockQuery, getStockPriceByDate } from '@/lib/supabase';
+import { buildComprehensiveAnalysis } from '@/lib/analysis';
+import { saveStockQuery, getLatestStockQuery, getSpecificStockQuery, getStockPriceByDate, getRecentStockQueries, getLatestCompletedAgentStory } from '@/lib/supabase';
 import type { StockInput, ApiResponse } from '@/lib/types';
 import { formatMarketDate } from '@/lib/date';
 
@@ -23,10 +24,17 @@ export async function POST(request: NextRequest) {
     const isToday = toDate === todayStr;
 
     // 2. Fetch data from both Stockbit APIs and emiten info
-    const [marketDetectorData, orderbookData, emitenInfoData] = await Promise.all([
+    const historyStart = new Date(`${toDate}T00:00:00Z`);
+    historyStart.setUTCDate(historyStart.getUTCDate() - 140);
+    const [marketDetectorData, orderbookData, emitenInfoData, historicalData, keyStatsData, benchmarkHistory, brokerHistory, catalyst] = await Promise.all([
       fetchMarketDetector(emiten, fromDate, toDate),
       fetchOrderbook(emiten),
       fetchEmitenInfo(emiten).catch(() => null),
+      fetchHistoricalSummary(emiten, historyStart.toISOString().slice(0, 10), toDate, 100).catch(() => []),
+      fetchKeyStats(emiten).catch(() => undefined),
+      fetchHistoricalSummary('COMPOSITE', historyStart.toISOString().slice(0, 10), toDate, 100).catch(() => []),
+      getRecentStockQueries(emiten).catch(() => []),
+      getLatestCompletedAgentStory(emiten).catch(() => null),
     ]);
 
     // Extract top broker data
@@ -103,8 +111,14 @@ export async function POST(request: NextRequest) {
     const offerPrices = (obData.offer || []).map((o: { price: string }) => Number(o.price));
     const bidPrices = (obData.bid || []).map((b: { price: string }) => Number(b.price));
 
-    marketData.offerTeratas = offerPrices.length > 0 ? Math.max(...offerPrices) : Number(obData.high || 0);
-    marketData.bidTerbawah = bidPrices.length > 0 ? Math.min(...bidPrices) : 0;
+    const officialAra = Number(obData.ara?.value ?? obData.ara);
+    const officialArb = Number(obData.arb?.value ?? obData.arb);
+    marketData.offerTeratas = officialAra > marketData.harga
+      ? officialAra
+      : offerPrices.length > 0 ? Math.max(...offerPrices) : Number(obData.high || 0);
+    marketData.bidTerbawah = officialArb > 0 && officialArb < marketData.harga
+      ? officialArb
+      : bidPrices.length > 0 ? Math.min(...bidPrices) : 0;
 
     const toOrderbookLevel = (level: {
       price: string;
@@ -151,6 +165,19 @@ export async function POST(request: NextRequest) {
       marketData.harga
     );
 
+    // Additional analysis is deliberately additive. Existing target calculations
+    // remain unchanged for backward compatibility.
+    const comprehensiveAnalysis = buildComprehensiveAnalysis({
+      brokerSummary,
+      orderbook,
+      lastPrice: marketData.harga,
+      history: historicalData,
+      keyStats: keyStatsData,
+      benchmarkHistory,
+      brokerHistory,
+      catalyst,
+    });
+
     // Prepare response
     const result: ApiResponse = {
       success: true,
@@ -172,6 +199,7 @@ export async function POST(request: NextRequest) {
         brokerSummary,
         sector,
         orderbook,
+        comprehensiveAnalysis,
       },
     };
 

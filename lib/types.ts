@@ -110,6 +110,34 @@ export interface OrderbookSnapshot {
   offer: OrderbookLevel[];
 }
 
+export interface AnalysisMetric {
+  key: string;
+  label: string;
+  value: number | string | null;
+  unit?: string;
+  signal: 'positive' | 'neutral' | 'negative' | 'unavailable';
+  description: string;
+}
+
+export interface AnalysisComponent {
+  key: 'brokerFlow' | 'technical' | 'fundamental' | 'valuation' | 'liquidity' | 'catalyst' | 'marketRegime';
+  label: string;
+  weight: number;
+  score: number | null;
+  available: boolean;
+  metrics: AnalysisMetric[];
+}
+
+export interface ComprehensiveAnalysis {
+  score: number;
+  confidence: number;
+  label: 'Kuat' | 'Positif' | 'Netral' | 'Hati-hati' | 'Lemah';
+  horizon: string;
+  generatedAt: string;
+  components: AnalysisComponent[];
+  warnings: string[];
+}
+
 export interface CalculatedData {
   totalPapan: number;
   rataRataBidOfer: number;
@@ -129,6 +157,7 @@ export interface StockAnalysisResult {
   historyDate?: string;
   sector?: string;
   orderbook?: OrderbookSnapshot;
+  comprehensiveAnalysis?: ComprehensiveAnalysis;
 }
 
 export interface ApiResponse {

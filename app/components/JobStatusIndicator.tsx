@@ -45,22 +45,29 @@ export default function JobStatusIndicator() {
 
     setIsRetrying(true);
     try {
-      // Determine base URL for Netlify functions
-      // netlify functions:serve usually runs on port 9999
-      const host = window.location.hostname;
-      if (latestLog.job_name !== 'analyze-watchlist') {
-        console.warn(`Retry not implemented for job: ${latestLog.job_name}`);
+      const supportedJobs = ['analyze-watchlist', 'analyze-story'];
+      if (!supportedJobs.includes(latestLog.job_name)) {
+        alert(`Retry belum didukung untuk job: ${latestLog.job_name}`);
+        return;
+      }
+
+      const emiten = [...(latestLog.log_entries || [])]
+        .reverse()
+        .find((entry) => entry.emiten)?.emiten;
+
+      if (latestLog.job_name === 'analyze-story' && !emiten) {
+        alert('Kode emiten tidak ditemukan pada log job ini.');
         return;
       }
 
       const res = await fetch('/api/job-retry', { 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobName: latestLog.job_name })
+        body: JSON.stringify({ jobName: latestLog.job_name, emiten })
       });
       const data = await res.json();
       
-      if (data.success) {
+      if (res.ok && data.success) {
         // Immediately fetch status to show "running"
         await fetchStatus();
       } else {
@@ -196,7 +203,7 @@ export default function JobStatusIndicator() {
               onClick={handleRetry}
               disabled={isRetrying}
             >
-              {isRetrying ? 'Triggering...' : isFailed ? 'Retry Failed Job' : 'Run Job Now'}
+              {isRetrying ? 'Triggering...' : isFailed ? 'Retry Failed Job' : 'Run Job Again'}
             </button>
           )}
         </div>

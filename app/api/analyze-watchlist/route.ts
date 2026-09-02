@@ -76,8 +76,12 @@ export async function POST(request: NextRequest) {
 
         const marketData = {
           harga: Number(obData.close),
-          offerTeratas: offerPrices.length > 0 ? Math.max(...offerPrices) : Number(obData.high || 0),
-          bidTerbawah: bidPrices.length > 0 ? Math.min(...bidPrices) : 0,
+          offerTeratas: Number(obData.ara?.value ?? obData.ara) > Number(obData.close)
+            ? Number(obData.ara?.value ?? obData.ara)
+            : offerPrices.length > 0 ? Math.max(...offerPrices) : Number(obData.high || 0),
+          bidTerbawah: Number(obData.arb?.value ?? obData.arb) > 0 && Number(obData.arb?.value ?? obData.arb) < Number(obData.close)
+            ? Number(obData.arb?.value ?? obData.arb)
+            : bidPrices.length > 0 ? Math.min(...bidPrices) : 0,
           totalBid: Number(obData.total_bid_offer.bid.lot.replace(/,/g, '')),
           totalOffer: Number(obData.total_bid_offer.offer.lot.replace(/,/g, '')),
         };

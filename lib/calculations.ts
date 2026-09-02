@@ -27,20 +27,23 @@ export function calculateTargets(
   totalOffer: number,
   harga: number
 ) {
+  const safeHarga = Number.isFinite(harga) && harga > 0 ? harga : rataRataBandar;
   // Calculate Fraksi
-  const fraksi = getFraksi(harga);
+  const fraksi = getFraksi(safeHarga);
 
   // Total Papan = (ARA - ARB) / Fraksi
-  const totalPapan = (ara - arb) / fraksi;
+  const rawTotalPapan = (ara - arb) / fraksi;
+  const totalPapan = Number.isFinite(rawTotalPapan) && rawTotalPapan > 0 ? rawTotalPapan : 1;
 
   // Rata rata Bid Ofer = (Total Bid + Total Offer) / Total Papan
-  const rataRataBidOfer = (totalBid + totalOffer) / totalPapan;
+  const rawAverage = (Math.max(0, totalBid) + Math.max(0, totalOffer)) / totalPapan;
+  const rataRataBidOfer = Number.isFinite(rawAverage) && rawAverage > 0 ? rawAverage : 1;
 
   // a = Rata rata bandar × 5%
   const a = rataRataBandar * 0.05;
 
   // p = Barang Bandar / Rata rata Bid Ofer
-  const p = barangBandar / rataRataBidOfer;
+  const p = Number.isFinite(barangBandar) && barangBandar > 0 ? barangBandar / rataRataBidOfer : 0;
 
   // Target Realistis = Rata rata bandar + a + (p/2 × Fraksi)
   const targetRealistis1 = rataRataBandar + a + ((p / 2) * fraksi);

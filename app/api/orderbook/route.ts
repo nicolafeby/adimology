@@ -34,10 +34,14 @@ export async function GET(request: NextRequest) {
     const result = {
       marketData: {
         harga: Number(data.close),
-        offerTeratas: data.offer?.length
+        offerTeratas: Number(data.ara?.value ?? data.ara) > Number(data.close)
+          ? Number(data.ara?.value ?? data.ara)
+          : data.offer?.length
           ? Math.max(...data.offer.map((level) => Number(level.price)))
           : Number(data.high || 0),
-        bidTerbawah: data.bid?.length
+        bidTerbawah: Number(data.arb?.value ?? data.arb) > 0 && Number(data.arb?.value ?? data.arb) < Number(data.close)
+          ? Number(data.arb?.value ?? data.arb)
+          : data.bid?.length
           ? Math.min(...data.bid.map((level) => Number(level.price)))
           : 0,
         totalBid: parseLot(data.total_bid_offer.bid.lot),

@@ -331,6 +331,31 @@ export async function getLatestStockQuery(emiten: string) {
   return data;
 }
 
+/** Read-only history used for multi-day broker-flow persistence scoring. */
+export async function getRecentStockQueries(emiten: string, limit = 20) {
+  const { data, error } = await supabase
+    .from('stock_queries')
+    .select('from_date, bandar, barang_bandar, rata_rata_bandar, harga, total_bid, total_offer')
+    .eq('emiten', emiten.toUpperCase())
+    .eq('status', 'success')
+    .order('from_date', { ascending: false })
+    .limit(limit);
+  return error ? [] : (data ?? []);
+}
+
+/** Latest completed catalyst analysis; absence must never fail stock analysis. */
+export async function getLatestCompletedAgentStory(emiten: string) {
+  const { data, error } = await supabase
+    .from('agent_stories')
+    .select('matriks_story, kesimpulan, created_at')
+    .eq('emiten', emiten.toUpperCase())
+    .eq('status', 'completed')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+  return error ? null : data;
+}
+
 /**
  * Get specific stock query for a given emiten and date range
  */

@@ -9,6 +9,7 @@ import AgentStoryCard from './AgentStoryCard';
 import PriceGraph from './PriceGraph';
 import OrderbookCard from './OrderbookCard';
 import EmitenHistoryCard from './EmitenHistoryCard';
+import AnalysisScoreCard from './AnalysisScoreCard';
 
 import * as htmlToImage from 'html-to-image';
 import type { StockInput, StockAnalysisResult, KeyStatsData, AgentStoryResult } from '@/lib/types';
@@ -16,6 +17,22 @@ import { getDefaultDate } from '@/lib/utils';
 
 interface CalculatorProps {
   selectedStock?: string | null;
+}
+
+const STORY_STALE_AFTER_MS = 10 * 60 * 1000;
+
+function isStoryStale(story?: AgentStoryResult) {
+  if (!story || !['pending', 'processing'].includes(story.status) || !story.created_at) return false;
+  const createdAt = new Date(story.created_at).getTime();
+  return Number.isFinite(createdAt) && Date.now() - createdAt > STORY_STALE_AFTER_MS;
+}
+
+function withStaleStoryError(stories: AgentStoryResult[]) {
+  if (!stories[0] || !isStoryStale(stories[0])) return stories;
+  return stories.map((story, index) => index === 0 ? {
+    ...story,
+    error_message: 'Analisis tidak memberikan respons dalam 10 menit. Job kemungkinan terputus; silakan coba lagi.',
+  } : story);
 }
 
 // Helper function to format the result data for copying
@@ -140,13 +157,16 @@ export default function Calculator({ selectedStock }: CalculatorProps) {
 
       // Fetch existing Agent Story if available
       try {
-        const storyRes = await fetch(`/api/analyze-story?emiten=${data.emiten}`);
+        const storyRes = await fetch(`/api/analyze-story?emiten=${data.emiten}`, { cache: 'no-store' });
         const storyJson = await storyRes.json();
         if (storyJson.success && storyJson.data && Array.isArray(storyJson.data)) {
-          setAgentStories(storyJson.data);
-          const latestStory = storyJson.data[0];
+          const stories = withStaleStoryError(storyJson.data);
+          setAgentStories(stories);
+          const latestStory = stories[0];
           if (latestStory.status === 'completed') {
             setStoryStatus('completed');
+          } else if (isStoryStale(latestStory)) {
+            setStoryStatus('error');
           } else if (latestStory.status === 'processing' || latestStory.status === 'pending') {
             // Resume polling only (GET) — do NOT create a new analysis via POST
             resumeStoryPolling(data.emiten);
@@ -202,32 +222,59 @@ export default function Calculator({ selectedStock }: CalculatorProps) {
   // Resume polling only (GET) for an in-progress story — does NOT create a new analysis
   const resumeStoryPolling = (emiten: string) => {
     setStoryStatus('processing');
-    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
 
-    pollIntervalRef.current = setInterval(async () => {
+    let polling = false;
+    const checkStatus = async () => {
+      if (polling) return;
+      polling = true;
       try {
-        const statusRes = await fetch(`/api/analyze-story?emiten=${emiten}`);
+        const statusRes = await fetch(`/api/analyze-story?emiten=${encodeURIComponent(emiten)}`, {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache' },
+        });
         const statusData = await statusRes.json();
 
         if (statusData.success && statusData.data && Array.isArray(statusData.data)) {
-          const stories = statusData.data;
+          const stories = withStaleStoryError(statusData.data);
           setAgentStories(stories);
 
           const latest = stories[0];
-          if (latest.status === 'completed') {
+          if (isStoryStale(latest)) {
+            setStoryStatus('error');
+            if (pollIntervalRef.current) {
+              clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
+            }
+          } else if (latest.status === 'completed') {
             setStoryStatus('completed');
-            if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+            if (pollIntervalRef.current) {
+              clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
+            }
           } else if (latest.status === 'error') {
             setStoryStatus('error');
-            if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-          } else if (latest.status === 'processing') {
-            setStoryStatus('processing');
+            if (pollIntervalRef.current) {
+              clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
+            }
+          } else if (latest.status === 'processing' || latest.status === 'pending') {
+            setStoryStatus(latest.status);
           }
         }
       } catch (err) {
         console.error('Polling error:', err);
+      } finally {
+        polling = false;
       }
-    }, 5000);
+    };
+
+    // Do not wait five seconds for the first state reconciliation.
+    void checkStatus();
+    pollIntervalRef.current = setInterval(checkStatus, 5000);
   };
 
   // User-initiated: create a NEW analysis via POST + start polling
@@ -427,6 +474,12 @@ export default function Calculator({ selectedStock }: CalculatorProps) {
                 emiten={result.input.emiten}
                 keyStats={keyStats}
               />
+            )}
+
+            {result.comprehensiveAnalysis && (
+              <div style={{ gridColumn: '1 / -1', width: '100%' }}>
+                <AnalysisScoreCard analysis={result.comprehensiveAnalysis} />
+              </div>
             )}
 
             {/* Emiten History Card - Full Width */}

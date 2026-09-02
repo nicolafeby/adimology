@@ -126,6 +126,7 @@ export async function fetchOrderbook(emiten: string): Promise<OrderbookResponse>
   const response = await fetch(url, {
     method: 'GET',
     headers: await getHeaders(),
+    cache: 'no-store',
   });
 
   await handleApiResponse(response, 'Orderbook API');

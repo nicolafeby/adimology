@@ -7,6 +7,7 @@ import type { StockRanking } from './types';
 import { evaluateMatureSignals } from './outcome-service';
 import { fetchIdxListedCompanies } from './idx';
 import { generateAiStory } from './ai-story-service';
+import { classifyMarketRegime } from './probability-calibration';
 
 const MODEL_VERSION = 'multifactor-ai-v2';
 
@@ -70,6 +71,7 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     return [result.value];
   }).sort((a, b) => b.pre.score - a.pre.score);
   const passed = preScreened.filter((item) => item.pre.passed);
+  const marketRegime = classifyMarketRegime(preScreened.map((item) => item.pre));
   // A small freshly bootstrapped universe may have no strict matches. Analyze its
   // best liquid/momentum rows so the UI can still explain why they are only Watch.
   const candidateLimit = options.deepLimit ?? 50;
@@ -77,7 +79,7 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
   const candidates = [...passed, ...preScreened.filter((item) => !passedSymbols.has(item.company.symbol))].slice(0, candidateLimit);
   const deepResults = await mapConcurrent(candidates, Math.min(options.concurrency ?? 4, 4), async ({ company }) => {
     const result = await analyzeSymbol(company.symbol, analysisDate);
-    const calibrated = await getCalibratedProbability(result.analysis.score);
+    const calibrated = await getCalibratedProbability(result.analysis.score, MODEL_VERSION, marketRegime);
     const classification = classifyTrend(result.analysis);
     return { result, calibrated, classification };
   });
@@ -124,7 +126,7 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
   // included in the comprehensive score and can change the final ordering.
   const rescoredResults = await mapConcurrent(aiCandidates.filter(({ result }) => aiValidatedSymbols.has(result.symbol)), Math.min(options.concurrency ?? 4, 4), async ({ result: previous }) => {
     const result = await analyzeSymbol(previous.symbol, analysisDate);
-    const calibrated = await getCalibratedProbability(result.analysis.score);
+    const calibrated = await getCalibratedProbability(result.analysis.score, MODEL_VERSION, marketRegime);
     const classification = classifyTrend(result.analysis);
     return { result, calibrated, classification, sortScore: rankingScore(result.analysis, calibrated?.probability ?? null) };
   });
@@ -166,7 +168,7 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     entry_price: result.lastPrice,
     target_price: result.targets.targetRealistis1,
     stop_price: Math.max(0, result.lastPrice - result.targets.fraksi * 5),
-    feature_snapshot: { components: result.analysis.components, model_probability: calibrated?.probability ?? null, probability_sample_size: calibrated?.sampleSize ?? 0 },
+    feature_snapshot: { components: result.analysis.components, market_regime: marketRegime, model_probability: calibrated?.probability ?? null, probability_sample_size: calibrated?.sampleSize ?? 0 },
     model_version: MODEL_VERSION,
   })));
   await saveStockQueriesForRanking(eligible.map(({ result }) => result), analysisDate);
@@ -177,6 +179,7 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     alertsCreated: alerts.length,
     bootstrapped,
     universeSource,
+    marketRegime,
     outcomeEvaluation,
     progress: { universe: universe.length, preScreened: preResults.filter((row) => row.status === 'fulfilled').length, candidates: candidates.length, analyzed: deepResults.filter((row) => row.status === 'fulfilled').length, aiRequested: aiCandidates.length, aiCompleted: aiValidatedSymbols.size, aiReused, errors } satisfies ScreenerProgress,
   };

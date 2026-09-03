@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import type { IdxListedCompany } from './idx';
 import { decryptSecret, encryptSecret, isSensitiveSessionKey } from './secret-storage';
+import { calibrateProbability, scoreBucket, type CalibratedProbability, type MarketRegime } from './probability-calibration';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -1244,15 +1245,21 @@ export async function getBacktestRows() {
   });
 }
 
-export async function getCalibratedProbability(score: number): Promise<{ probability: number; sampleSize: number } | null> {
+export async function getCalibratedProbability(score: number, modelVersion: string, marketRegime: MarketRegime): Promise<CalibratedProbability | null> {
   const db = getSupabaseAdmin();
-  const low = Math.floor(score / 10) * 10;
-  const { data, error } = await db.from('signal_snapshots').select('id').gte('score', low).lt('score', low + 10);
+  const { low, high } = scoreBucket(score);
+  const { data, error } = await db.from('signal_snapshots').select('id, score, model_version, feature_snapshot').eq('model_version', modelVersion).gte('score', low).lt('score', high);
   if (error || !data?.length) return null;
-  const ids = data.map((row) => row.id);
-  const { data: outcomes } = await db.from('signal_outcomes').select('return_10d').in('snapshot_id', ids).not('return_10d', 'is', null);
-  if (!outcomes || outcomes.length < 30) return null;
-  return { probability: outcomes.filter((row) => Number(row.return_10d) > 0).length / outcomes.length, sampleSize: outcomes.length };
+  const matchingSnapshots = data.filter((row) => row.feature_snapshot?.market_regime === marketRegime);
+  if (!matchingSnapshots.length) return null;
+  const snapshotMap = new Map(matchingSnapshots.map((row) => [row.id, row]));
+  const { data: outcomes, error: outcomeError } = await db.from('signal_outcomes').select('snapshot_id, return_10d').in('snapshot_id', [...snapshotMap.keys()]).not('return_10d', 'is', null);
+  if (outcomeError || !outcomes) return null;
+  return calibrateProbability(outcomes.flatMap((outcome) => {
+    const snapshot = snapshotMap.get(outcome.snapshot_id);
+    if (!snapshot) return [];
+    return [{ score: Number(snapshot.score), modelVersion: String(snapshot.model_version), marketRegime, return10d: Number(outcome.return_10d) }];
+  }), score, modelVersion, marketRegime);
 }
 
 export async function createMatchingAlertEvents(rankings: Array<{ id?: number; symbol: string; score: number; data_completeness: number; model_probability: number | null; signal: string }>) {

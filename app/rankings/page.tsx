@@ -8,6 +8,8 @@ import RankingDetailModal, { buildDetailSummary, type RankingDetailData } from '
 interface UniverseCompany { symbol: string; company_name: string; sector?: string | null; board?: string | null }
 
 const signalLabel: Record<string, string> = { confirmed_uptrend: 'Confirmed Uptrend', early_uptrend: 'Early Uptrend', watch: 'Watch', avoid: 'Avoid' };
+const regimeLabel: Record<string, string> = { bullish: 'Bullish', neutral: 'Neutral', bearish: 'Bearish', unavailable: 'Belum tersedia' };
+const signedPercent = (value: number | null | undefined) => value == null ? 'Belum tersedia' : `${value >= 0 ? '+' : ''}${value.toLocaleString('id-ID', { maximumFractionDigits: 1 })}%`;
 const percent = (value: number | null | undefined) => value == null ? 'Belum tersedia' : `${(value * 100).toFixed(1)}%`;
 const summarizeRunError = (message: string) => message.includes('429') || message.includes('quota') || message.includes('RESOURCE_EXHAUSTED') ? 'Kuota Gemini habis (HTTP 429)' : message.includes('503') || message.includes('high demand') ? 'Gemini sedang sibuk (HTTP 503)' : message.includes('masih diproses') ? 'AI Story masih diproses job sebelumnya' : message.length > 140 ? `${message.slice(0, 137)}…` : message;
 
@@ -84,8 +86,9 @@ export default function RankingsPage() {
       <section className="ranking-grid">
         {rankings.map((row) => (
           <article className="ranking-card" key={`${row.analysis_date}-${row.symbol}`}>
-            <div className="ranking-card-head"><span className="ranking-number">#{row.rank}</span><div><Link href={`/?symbol=${row.symbol}`}>{row.symbol}</Link><span className={`signal-pill signal-${row.signal}`}>{signalLabel[row.signal] ?? row.signal}</span>{row.reasons.some((reason) => reason.label === 'Scoring Model' && reason.value === 'multifactor-ai-v2') && <span className="ai-validated-pill">AI Validated · v2</span>}</div><strong>{row.score}<small>/100</small></strong></div>
+            <div className="ranking-card-head"><span className="ranking-number">#{row.rank}</span><div><Link href={`/?symbol=${row.symbol}`}>{row.symbol}</Link><span className={`signal-pill signal-${row.signal}`}>{signalLabel[row.signal] ?? row.signal}</span>{row.reasons.some((reason) => reason.label === 'Scoring Model' && reason.value === 'multifactor-regime-rs-v3') && <span className="ai-validated-pill">Regime + RS · v3</span>}</div><strong>{row.score}<small>/100</small></strong></div>
             <div className="ranking-stats"><div><span>Harga</span><strong>Rp {Number(row.last_price).toLocaleString('id-ID')}</strong></div><div><span>Kelengkapan</span><strong>{row.data_completeness}%</strong></div><div><span>Peluang 10D</span><strong>{percent(row.model_probability)}</strong></div></div>
+            {row.market_context && <div className="ranking-stats"><div><span>Market Regime</span><strong>{regimeLabel[row.market_context.regime.label]}</strong></div><div><span>RS vs IHSG 20D</span><strong>{signedPercent(row.market_context.relativeStrength.rs20d)}</strong></div><div><span>Gate</span><strong>{row.market_context.gate.applied ? `${signalLabel[row.market_context.gate.signalBeforeGate]} → ${signalLabel[row.market_context.gate.signalAfterGate]}` : 'Tidak mengubah sinyal'}</strong></div></div>}
             <div className="ranking-card-summary"><strong>Resume analisis</strong><p>{buildDetailSummary(row)}</p></div>
             <div className="ranking-reasons">{(row.reasons ?? []).map((reason) => <span className={reason.positive ? 'positive' : ''} key={reason.label}>{reason.label}: {reason.value}</span>)}</div>
             {(row.risk_flags ?? []).length > 0 && <p className="ranking-risk">Risiko: {row.risk_flags.join(' · ')}</p>}

@@ -126,6 +126,8 @@ export interface AnalysisComponent {
   score: number | null;
   available: boolean;
   metrics: AnalysisMetric[];
+  /** Stored inside the existing components JSON for schema-compatible persistence. */
+  marketContext?: { regime: MarketRegimeAnalysis; relativeStrength: RelativeStrengthAnalysis; gate: MarketGateAudit };
 }
 
 export interface ComprehensiveAnalysis {
@@ -178,6 +180,42 @@ export interface PositionSizingOptions {
 }
 
 export type TrendSignal = 'early_uptrend' | 'confirmed_uptrend' | 'watch' | 'avoid';
+export type MarketRegimeLabel = 'bullish' | 'neutral' | 'bearish' | 'unavailable';
+export type RelativeStrengthLabel = 'strong' | 'moderate' | 'weak' | 'unavailable';
+
+export interface MarketRegimeAnalysis {
+  label: MarketRegimeLabel;
+  score: number | null;
+  reasons: string[];
+  dataCompleteness: number;
+  features: { sessions: number; latestClose: number | null; return5d: number | null; return20d: number | null; sma20: number | null; priceVsSma20: number | null; sma20Trend: number | null; relativeVolume: number | null };
+}
+
+export interface RelativeStrengthAnalysis {
+  label: RelativeStrengthLabel;
+  rs5d: number | null;
+  rs20d: number | null;
+  sectorRs5d: number | null;
+  sectorRs20d: number | null;
+  stockReturn5d: number | null;
+  stockReturn20d: number | null;
+  marketReturn5d: number | null;
+  marketReturn20d: number | null;
+  sectorReturn5d: number | null;
+  sectorReturn20d: number | null;
+  dataCompleteness: number;
+}
+
+export interface MarketGateAudit {
+  applied: boolean;
+  signalBeforeGate: TrendSignal;
+  signalAfterGate: TrendSignal;
+  exceptionalStrength: boolean;
+  reason: string;
+  confidenceAdjustment: number;
+  confidenceBefore: number | null;
+  confidenceAfter: number | null;
+}
 
 export interface RankingReason {
   label: string;
@@ -198,6 +236,8 @@ export interface StockRanking {
   reasons: RankingReason[];
   risk_flags: string[];
   components: AnalysisComponent[];
+  /** Optional so rankings persisted before regime-gate-v3 remain readable. */
+  market_context?: { regime: MarketRegimeAnalysis; relativeStrength: RelativeStrengthAnalysis; gate: MarketGateAudit };
   created_at?: string;
 }
 

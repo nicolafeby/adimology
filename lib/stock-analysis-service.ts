@@ -2,8 +2,10 @@ import { buildComprehensiveAnalysis } from './analysis';
 import { calculateTargets } from './calculations';
 import { getLatestCompletedAgentStory, getRecentStockQueries } from './supabase';
 import { fetchEmitenInfo, fetchHistoricalSummary, fetchKeyStats, fetchMarketDetector, fetchOrderbook, getBrokerSummary, getTopBroker, parseLot } from './stockbit';
+import { calculateMarketRegime, calculateRelativeStrength } from './market-regime';
+import type { HistoricalSummaryItem } from './stockbit';
 
-export async function analyzeSymbol(symbol: string, analysisDate: string) {
+export async function analyzeSymbol(symbol: string, analysisDate: string, benchmarks: { marketHistory?: HistoricalSummaryItem[]; sectorHistory?: HistoricalSummaryItem[] } = {}) {
   const emiten = symbol.trim().toUpperCase();
   const start = new Date(`${analysisDate}T00:00:00Z`);
   start.setUTCDate(start.getUTCDate() - 140);
@@ -11,13 +13,13 @@ export async function analyzeSymbol(symbol: string, analysisDate: string) {
   const detectorStartDate = new Date(`${analysisDate}T00:00:00Z`);
   detectorStartDate.setUTCDate(detectorStartDate.getUTCDate() - 28);
   const detectorStart = detectorStartDate.toISOString().slice(0, 10);
-  const [detector, orderbookResponse, info, history, keyStats, benchmark, brokerHistory, catalyst] = await Promise.all([
+  const [detector, orderbookResponse, info, history, keyStats, fetchedBenchmark, brokerHistory, catalyst] = await Promise.all([
     fetchMarketDetector(emiten, detectorStart, analysisDate),
     fetchOrderbook(emiten),
     fetchEmitenInfo(emiten).catch(() => null),
     fetchHistoricalSummary(emiten, historyStart, analysisDate, 100).catch(() => []),
     fetchKeyStats(emiten).catch(() => undefined),
-    fetchHistoricalSummary('COMPOSITE', historyStart, analysisDate, 100).catch(() => []),
+    benchmarks.marketHistory ? Promise.resolve(benchmarks.marketHistory) : fetchHistoricalSummary('COMPOSITE', historyStart, analysisDate, 100).catch(() => []),
     getRecentStockQueries(emiten).catch(() => []),
     getLatestCompletedAgentStory(emiten).catch(() => null),
   ]);
@@ -40,6 +42,12 @@ export async function analyzeSymbol(symbol: string, analysisDate: string) {
   const totalBid = parseLot(ob.total_bid_offer.bid.lot);
   const totalOffer = parseLot(ob.total_bid_offer.offer.lot);
   const targets = calculateTargets(brokerData.rataRataBandar, brokerData.barangBandar, ara, arb, totalBid / 100, totalOffer / 100, lastPrice);
-  const analysis = buildComprehensiveAnalysis({ brokerSummary, orderbook, lastPrice, history, keyStats, benchmarkHistory: benchmark, brokerHistory, catalyst });
-  return { symbol: emiten, sector: info?.data?.sector, brokerData, brokerSummary, orderbook, history, lastPrice, ara, arb, totalBid, totalOffer, targets, analysis, catalyst };
+  // Enforce the requested as-of date even if an upstream feed returns newer rows.
+  const asOfHistory = history.filter((row) => row.date <= analysisDate);
+  const asOfMarket = fetchedBenchmark.filter((row) => row.date <= analysisDate);
+  const asOfSector = benchmarks.sectorHistory?.filter((row) => row.date <= analysisDate);
+  const marketRegime = calculateMarketRegime(asOfMarket);
+  const relativeStrength = calculateRelativeStrength(asOfHistory, asOfMarket, asOfSector);
+  const analysis = buildComprehensiveAnalysis({ brokerSummary, orderbook, lastPrice, history: asOfHistory, keyStats, benchmarkHistory: asOfMarket, brokerHistory, catalyst });
+  return { symbol: emiten, sector: info?.data?.sector, brokerData, brokerSummary, orderbook, history: asOfHistory, lastPrice, ara, arb, totalBid, totalOffer, targets, analysis, catalyst, marketRegime, relativeStrength };
 }

@@ -1,5 +1,7 @@
 import type { AnalysisComponent, ComprehensiveAnalysis, RankingReason, TrendSignal } from './types';
 import type { HistoricalSummaryItem } from './stockbit';
+import { applyMarketRegimeGate } from './market-regime';
+import type { MarketRegimeAnalysis, RelativeStrengthAnalysis } from './types';
 
 const metricNumber = (components: AnalysisComponent[], key: string) => {
   for (const component of components) {
@@ -72,6 +74,22 @@ export function classifyTrend(analysis: ComprehensiveAnalysis): { signal: TrendS
   else if (analysis.score >= 70 && (volume ?? 0) >= 1.2 && (broker ?? 0) >= 60) signal = 'confirmed_uptrend';
   else if (analysis.score >= 60 && (r5 ?? 0) > 0) signal = 'early_uptrend';
   return { signal, reasons: reasons.slice(0, 4), riskFlags };
+}
+
+export function classifyTrendWithMarketGate(analysis: ComprehensiveAnalysis, marketRegime: MarketRegimeAnalysis, relativeStrength: RelativeStrengthAnalysis) {
+  const base = classifyTrend(analysis);
+  const gate = applyMarketRegimeGate({
+    signal: base.signal,
+    marketRegime,
+    relativeStrength,
+    relativeVolume: metricNumber(analysis.components, 'volumeRatio'),
+    brokerFlowScore: analysis.components.find((item) => item.key === 'brokerFlow')?.score ?? null,
+    dataCompleteness: analysis.dataCompleteness,
+    confidence: analysis.confidence,
+  });
+  const reasons = [...base.reasons];
+  if (relativeStrength.rs20d !== null) reasons.push({ label: 'RS vs IHSG 20D', value: `${relativeStrength.rs20d >= 0 ? '+' : ''}${relativeStrength.rs20d.toFixed(1)}%`, positive: relativeStrength.rs20d > 0 });
+  return { signal: gate.signalAfterGate, reasons: reasons.slice(0, 5), riskFlags: [...base.riskFlags, ...gate.riskFlags], gate };
 }
 
 export function rankingScore(analysis: ComprehensiveAnalysis, probability: number | null): number {

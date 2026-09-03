@@ -8,6 +8,7 @@ import type {
 } from './types';
 import type { AiStoryScoring } from './types';
 import type { HistoricalSummaryItem } from './stockbit';
+import { calculateHistoricalFeatures, calculateMarketRegime } from './market-regime';
 
 const clamp = (value: number, min = 0, max = 100) => Math.min(max, Math.max(min, value));
 const finite = (value: number) => Number.isFinite(value) ? value : 0;
@@ -105,17 +106,17 @@ function technicalComponent(history: HistoricalSummaryItem[]): AnalysisComponent
   const rows = [...history].filter((x) => x.close > 0).sort((a, b) => a.date.localeCompare(b.date));
   if (rows.length < 5) return { key: 'technical', label: 'Tren & Risiko', weight, score: null, available: false, metrics: [] };
   const latest = rows.at(-1)!;
-  const change = (days: number) => rows.length > days ? ((latest.close / rows[rows.length - 1 - days].close) - 1) * 100 : null;
-  const r5 = change(5);
-  const r20 = change(20);
+  const historicalFeatures = calculateHistoricalFeatures(rows);
+  const r5 = historicalFeatures.return5d;
+  const r20 = historicalFeatures.return20d;
   const window20 = rows.slice(-20);
-  const sma20 = window20.reduce((sum, x) => sum + x.close, 0) / window20.length;
+  const sma20 = historicalFeatures.sma20 ?? window20.reduce((sum, x) => sum + x.close, 0) / window20.length;
   const atrRows = rows.slice(-15);
   const ranges = atrRows.slice(1).map((x, i) => Math.max(x.high - x.low, Math.abs(x.high - atrRows[i].close), Math.abs(x.low - atrRows[i].close)));
   const atrPct = ranges.length ? (ranges.reduce((a, b) => a + b, 0) / ranges.length / latest.close) * 100 : 0;
   const volumes = window20.map((x) => x.volume).filter((x) => x > 0);
   const averageVolume = volumes.length ? volumes.reduce((a, b) => a + b, 0) / volumes.length : 0;
-  const volumeRatio = averageVolume > 0 ? latest.volume / averageVolume : 1;
+  const volumeRatio = historicalFeatures.relativeVolume ?? (averageVolume > 0 ? latest.volume / averageVolume : 1);
   const netForeign = window20.reduce((sum, x) => sum + finite(x.net_foreign), 0);
   let score = 50;
   if (r5 !== null) score += clamp(r5, -10, 10) * 1.2;
@@ -190,7 +191,7 @@ export function buildComprehensiveAnalysis(input: {
   benchmarkHistory?: HistoricalSummaryItem[];
   catalyst?: { matriks_story?: Array<{ potensi_dampak_harga?: string }>; kesimpulan?: string; swot_analysis?: { ai_scoring?: AiStoryScoring }; created_at?: string } | null;
 }): ComprehensiveAnalysis {
-  const benchmark = technicalComponent(input.benchmarkHistory ?? []);
+  const regime = calculateMarketRegime(input.benchmarkHistory ?? []);
   const aiScoring = input.catalyst?.swot_analysis?.ai_scoring;
   const catalystComponent: AnalysisComponent = aiScoring ? {
     key: 'catalyst', label: 'Katalis & Kepemilikan', weight: 10,
@@ -202,9 +203,15 @@ export function buildComprehensiveAnalysis(input: {
       metric('ownership', 'Perubahan Kepemilikan', null, 'unavailable', 'Feed ownership terstruktur belum tersedia.'),
     ],
   } : { key: 'catalyst', label: 'Katalis & Kepemilikan', weight: 10, score: null, available: false, metrics: [] };
-  const marketComponent: AnalysisComponent = benchmark.available ? {
-    ...benchmark, key: 'marketRegime', label: 'Market Regime', weight: 5,
-  } : { key: 'marketRegime', label: 'Market Regime', weight: 5, score: null, available: false, metrics: [] };
+  const marketComponent: AnalysisComponent = regime.label !== 'unavailable' ? {
+    key: 'marketRegime', label: 'Market Regime IHSG', weight: 5, score: regime.score, available: true,
+    metrics: [
+      metric('marketRegimeLabel', 'Regime', regime.label, regime.label === 'bullish' ? 'positive' : regime.label === 'bearish' ? 'negative' : 'neutral', regime.reasons.join(' ')),
+      metric('marketReturn5d', 'Return IHSG 5D', regime.features.return5d, regime.features.return5d! > 0 ? 'positive' : 'negative', 'Return penutupan IHSG selama lima sesi.', '%'),
+      metric('marketReturn20d', 'Return IHSG 20D', regime.features.return20d, regime.features.return20d! > 0 ? 'positive' : 'negative', 'Return penutupan IHSG selama 20 sesi.', '%'),
+      metric('marketSma20Trend', 'Tren SMA20 IHSG', regime.features.sma20Trend, regime.features.sma20Trend === null ? 'unavailable' : regime.features.sma20Trend > 0 ? 'positive' : 'negative', 'Perubahan SMA20 selama lima sesi.', '%'),
+    ],
+  } : { key: 'marketRegime', label: 'Market Regime IHSG', weight: 5, score: null, available: false, metrics: [metric('marketRegimeLabel', 'Regime', 'unavailable', 'unavailable', regime.reasons.join(' '))] };
   const components: AnalysisComponent[] = [
     brokerFlowComponent(input.brokerSummary, input.brokerHistory),
     technicalComponent(input.history ?? []),

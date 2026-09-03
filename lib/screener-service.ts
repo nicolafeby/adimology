@@ -1,5 +1,5 @@
 import { formatMarketDate } from './date';
-import { classifyTrend, preScreenHistory, rankingScore } from './ranking';
+import { classifyTrendWithMarketGate, preScreenHistory, rankingScore } from './ranking';
 import { analyzeSymbol } from './stock-analysis-service';
 import { fetchHistoricalSummary } from './stockbit';
 import { bootstrapIdxUniverseFromCache, createAgentStory, createMatchingAlertEvents, ensureDefaultAlertRule, getActiveIdxUniverse, getAgentStoryByEmiten, getCalibratedProbability, saveIdxUniverse, saveSignalSnapshots, saveStockQueriesForRanking, saveStockRankings, updateAgentStory } from './supabase';
@@ -7,9 +7,10 @@ import type { StockRanking } from './types';
 import { evaluateMatureSignals } from './outcome-service';
 import { fetchIdxListedCompanies } from './idx';
 import { generateAiStory } from './ai-story-service';
-import { classifyMarketRegime } from './probability-calibration';
+import { calculateMarketRegime } from './market-regime';
+import { RANKING_MODEL_VERSION } from './model-version';
 
-const MODEL_VERSION = 'multifactor-ai-v2';
+const MODEL_VERSION = RANKING_MODEL_VERSION;
 
 async function mapConcurrent<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
   const results: PromiseSettledResult<R>[] = new Array(items.length);
@@ -58,6 +59,8 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
   const start = new Date(`${analysisDate}T00:00:00Z`);
   start.setUTCDate(start.getUTCDate() - 60);
   const historyStart = start.toISOString().slice(0, 10);
+  const marketHistory = (await fetchHistoricalSummary('COMPOSITE', historyStart, analysisDate, 100).catch(() => [])).filter((row) => row.date <= analysisDate);
+  const marketRegime = calculateMarketRegime(marketHistory);
   const preResults = await mapConcurrent(universe, options.concurrency ?? 5, async (company) => {
     const history = await fetchHistoricalSummary(company.symbol, historyStart, analysisDate, 45);
     return { company, pre: preScreenHistory(history) };
@@ -71,16 +74,15 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     return [result.value];
   }).sort((a, b) => b.pre.score - a.pre.score);
   const passed = preScreened.filter((item) => item.pre.passed);
-  const marketRegime = classifyMarketRegime(preScreened.map((item) => item.pre));
   // A small freshly bootstrapped universe may have no strict matches. Analyze its
   // best liquid/momentum rows so the UI can still explain why they are only Watch.
   const candidateLimit = options.deepLimit ?? 50;
   const passedSymbols = new Set(passed.map((item) => item.company.symbol));
   const candidates = [...passed, ...preScreened.filter((item) => !passedSymbols.has(item.company.symbol))].slice(0, candidateLimit);
   const deepResults = await mapConcurrent(candidates, Math.min(options.concurrency ?? 4, 4), async ({ company }) => {
-    const result = await analyzeSymbol(company.symbol, analysisDate);
-    const calibrated = await getCalibratedProbability(result.analysis.score, MODEL_VERSION, marketRegime);
-    const classification = classifyTrend(result.analysis);
+    const result = await analyzeSymbol(company.symbol, analysisDate, { marketHistory });
+    const calibrated = await getCalibratedProbability(result.analysis.score, MODEL_VERSION, marketRegime.label);
+    const classification = classifyTrendWithMarketGate(result.analysis, result.marketRegime, result.relativeStrength);
     return { result, calibrated, classification };
   });
   const quantitativeCandidates = deepResults.flatMap((item, index) => {
@@ -125,9 +127,9 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
   // Re-run only AI-validated candidates so the freshly persisted catalyst is
   // included in the comprehensive score and can change the final ordering.
   const rescoredResults = await mapConcurrent(aiCandidates.filter(({ result }) => aiValidatedSymbols.has(result.symbol)), Math.min(options.concurrency ?? 4, 4), async ({ result: previous }) => {
-    const result = await analyzeSymbol(previous.symbol, analysisDate);
-    const calibrated = await getCalibratedProbability(result.analysis.score, MODEL_VERSION, marketRegime);
-    const classification = classifyTrend(result.analysis);
+    const result = await analyzeSymbol(previous.symbol, analysisDate, { marketHistory });
+    const calibrated = await getCalibratedProbability(result.analysis.score, MODEL_VERSION, marketRegime.label);
+    const classification = classifyTrendWithMarketGate(result.analysis, result.marketRegime, result.relativeStrength);
     return { result, calibrated, classification, sortScore: rankingScore(result.analysis, calibrated?.probability ?? null) };
   });
   const eligible = rescoredResults.flatMap((item, index) => {
@@ -138,7 +140,9 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     return [item.value];
   }).sort((a, b) => b.sortScore - a.sortScore);
   if (!eligible.length) throw new Error('Tidak ada kandidat AI yang berhasil dihitung ulang; snapshot sebelumnya dipertahankan.');
-  const rankingRows: StockRanking[] = eligible.map(({ result, calibrated, classification }, index) => ({
+  const rankingRows: StockRanking[] = eligible.map(({ result, calibrated, classification }, index) => {
+    const marketContext = { regime: result.marketRegime, relativeStrength: result.relativeStrength, gate: classification.gate };
+    return {
     analysis_date: analysisDate,
     symbol: result.symbol,
     rank: index + 1,
@@ -156,8 +160,10 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
       ...classification.reasons,
     ],
     risk_flags: classification.riskFlags,
-    components: result.analysis.components,
-  }));
+    components: result.analysis.components.map((component) => component.key === 'marketRegime' ? { ...component, marketContext } : component),
+    market_context: marketContext,
+  };
+  });
   const saved = await saveStockRankings(rankingRows as unknown as Array<Record<string, unknown>>);
   await saveSignalSnapshots(eligible.map(({ result, calibrated, classification }) => ({
     signal_date: analysisDate,
@@ -168,7 +174,7 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     entry_price: result.lastPrice,
     target_price: result.targets.targetRealistis1,
     stop_price: Math.max(0, result.lastPrice - result.targets.fraksi * 5),
-    feature_snapshot: { components: result.analysis.components, market_regime: marketRegime, model_probability: calibrated?.probability ?? null, probability_sample_size: calibrated?.sampleSize ?? 0 },
+    feature_snapshot: { components: result.analysis.components, market_regime: marketRegime.label, market_regime_analysis: result.marketRegime, relative_strength: result.relativeStrength, gate: classification.gate, raw_features: { stock_history: result.history, market_history: marketHistory }, model_probability: calibrated?.probability ?? null, probability_sample_size: calibrated?.sampleSize ?? 0 },
     model_version: MODEL_VERSION,
   })));
   await saveStockQueriesForRanking(eligible.map(({ result }) => result), analysisDate);

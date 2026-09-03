@@ -1157,15 +1157,25 @@ export async function saveStockRankings(rows: Array<Record<string, unknown>>) {
   const db = getSupabaseAdmin();
   // A ranking run is a complete daily snapshot. Upsert the new snapshot first,
   // then remove stale symbols so a failed insert cannot erase the prior result.
+  // market_context is embedded in the existing components JSON. Strip the
+  // convenience projection so deployments do not require an added DB column.
+  const persistedRows = rows.map(({ market_context: _marketContext, ...row }) => row);
   const { data, error } = await db
     .from('stock_rankings')
-    .upsert(rows, { onConflict: 'analysis_date,symbol' })
+    .upsert(persistedRows, { onConflict: 'analysis_date,symbol' })
     .select();
   if (error) throw error;
   const symbols = rows.map((row) => String(row.symbol)).filter((symbol) => /^[A-Z0-9]{4,12}$/.test(symbol));
   const { error: cleanupError } = await db.from('stock_rankings').delete().eq('analysis_date', analysisDate).not('symbol', 'in', `(${symbols.join(',')})`);
   if (cleanupError) throw cleanupError;
-  return data ?? [];
+  const contextBySymbol = new Map(rows.map((row) => [String(row.symbol), row.market_context]));
+  return (data ?? []).map((row) => ({ ...row, market_context: contextBySymbol.get(String(row.symbol)) }));
+}
+
+function hydrateRankingMarketContext<T extends { components?: unknown; market_context?: unknown }>(row: T): T {
+  if (row.market_context || !Array.isArray(row.components)) return row;
+  const component = row.components.find((item: { key?: string; marketContext?: unknown }) => item?.key === 'marketRegime' && item.marketContext);
+  return component ? { ...row, market_context: component.marketContext } : row;
 }
 
 export async function getStockRankings(date?: string, limit = 10) {
@@ -1183,9 +1193,9 @@ export async function getStockRankings(date?: string, limit = 10) {
   const uniqueRanks = new Map<number, (typeof data)[number]>();
   for (const row of data ?? []) {
     const reasons = Array.isArray(row.reasons) ? row.reasons : [];
-    const isAiV2 = reasons.some((reason: { label?: string; value?: string }) => reason.label === 'Scoring Model' && reason.value === 'multifactor-ai-v2')
+    const isAiV2 = reasons.some((reason: { label?: string; value?: string }) => reason.label === 'Scoring Model' && ['multifactor-ai-v2', 'multifactor-regime-rs-v3'].includes(reason.value ?? ''))
       && reasons.some((reason: { label?: string }) => reason.label === 'AI Story');
-    if (isAiV2 && !uniqueRanks.has(Number(row.rank))) uniqueRanks.set(Number(row.rank), row);
+    if (isAiV2 && !uniqueRanks.has(Number(row.rank))) uniqueRanks.set(Number(row.rank), hydrateRankingMarketContext(row));
   }
   return [...uniqueRanks.values()].slice(0, limit);
 }
@@ -1200,7 +1210,7 @@ export async function getStockRankingDetail(symbol: string, date?: string) {
   ]);
   if (rankingError) throw rankingError;
   if (storyError) throw storyError;
-  return { ranking, story };
+  return { ranking: ranking ? hydrateRankingMarketContext(ranking) : ranking, story };
 }
 
 export async function saveSignalSnapshots(rows: Array<Record<string, unknown>>) {
@@ -1230,7 +1240,7 @@ export async function saveSignalOutcome(row: Record<string, unknown>) {
   return data;
 }
 
-export async function getBacktestRows() {
+export async function getBacktestRows(modelVersion?: string) {
   const db = getSupabaseAdmin();
   const [{ data: outcomes, error: outcomeError }, { data: snapshots, error: snapshotError }] = await Promise.all([
     db.from('signal_outcomes').select('*'),
@@ -1242,7 +1252,7 @@ export async function getBacktestRows() {
   return (outcomes ?? []).map((row) => {
     const snapshot = snapshotMap.get(row.snapshot_id);
     return { ...row, signal_date: snapshot?.signal_date ?? null, snapshot, model_probability: snapshot?.feature_snapshot?.model_probability ?? null };
-  });
+  }).filter((row) => !modelVersion || row.snapshot?.model_version === modelVersion);
 }
 
 export async function getCalibratedProbability(score: number, modelVersion: string, marketRegime: MarketRegime): Promise<CalibratedProbability | null> {

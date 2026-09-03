@@ -1,4 +1,5 @@
-export type MarketRegime = 'bull' | 'sideways' | 'bear';
+/** Legacy breadth labels remain accepted so historical v2 cohorts stay readable. */
+export type MarketRegime = 'bull' | 'sideways' | 'bear' | 'bullish' | 'neutral' | 'bearish' | 'unavailable';
 
 export interface CalibrationObservation {
   score: number;

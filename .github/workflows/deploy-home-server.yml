@@ -128,7 +128,11 @@ jobs:
         run: |
           export DEPLOYED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           ln -sfn "$RELEASE_PATH" "$DEPLOY_PATH/current"
-          npx --no-install pm2 startOrReload deploy/ecosystem.config.cjs --update-env
+          # PM2 reload preserves the original script/cwd for an existing app. Because
+          # every deployment uses a new release directory, recreate the process so it
+          # cannot keep serving server.js from the previous release.
+          npx --no-install pm2 delete adimology >/dev/null 2>&1 || true
+          npx --no-install pm2 start deploy/ecosystem.config.cjs --update-env
           npx --no-install pm2 save
 
       - name: Verify active release
@@ -145,11 +149,11 @@ jobs:
             while (Date.now() < deadline) {
               try {
                 const response = await fetch(url, { cache: 'no-store' });
-                const body = await response.json();
-
                 if (!response.ok) {
                   throw new Error(`HTTP ${response.status}`);
                 }
+
+                const body = await response.json();
 
                 if (body.sha !== expectedSha) {
                   throw new Error(

@@ -56,6 +56,16 @@ const Navbar = () => {
               Calculator
             </Link>
             <Link
+              href="/portfolio"
+              style={{
+                textDecoration: 'none', color: pathname === '/portfolio' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                fontWeight: pathname === '/portfolio' ? 600 : 400, fontSize: '0.9rem',
+                borderBottom: pathname === '/portfolio' ? '2px solid #16a34a' : '2px solid transparent', paddingBottom: '2px'
+              }}
+            >
+              Portfolio
+            </Link>
+            <Link
               href="/rankings"
               style={{
                 textDecoration: 'none', color: pathname === '/rankings' ? 'var(--text-primary)' : 'var(--text-secondary)',
@@ -148,7 +158,7 @@ const Navbar = () => {
         {/* Mobile Menu */}
         <div className={`nav-mobile-menu ${isMenuOpen ? 'open' : ''}`}>
           <div className="nav-links">
-            <Link 
+            <Link
               href="/" 
               onClick={() => setIsMenuOpen(false)}
               style={{
@@ -162,7 +172,14 @@ const Navbar = () => {
             >
               Calculator
             </Link>
-            <Link 
+            <Link
+              href="/portfolio"
+              onClick={() => setIsMenuOpen(false)}
+              style={{ textDecoration: 'none', color: pathname === '/portfolio' ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: pathname === '/portfolio' ? 600 : 400, fontSize: '1rem', padding: '0.5rem 0' }}
+            >
+              Portfolio
+            </Link>
+            <Link
               href="/rankings"
               onClick={() => setIsMenuOpen(false)}
               style={{ textDecoration: 'none', color: pathname === '/rankings' ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: pathname === '/rankings' ? 600 : 400, fontSize: '1rem', padding: '0.5rem 0' }}

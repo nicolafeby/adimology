@@ -1,29 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { setProfileSetting } from '@/lib/supabase';
-import { clearSession } from '@/lib/auth';
-
-async function hashPassword(password: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
+import { clearSession, getSession } from '@/lib/auth';
+import { getProfileSetting } from '@/lib/supabase';
+import { hashPassword } from '@/lib/password';
+import { isSameOrigin } from '@/lib/request-security';
 
 export async function POST(request: NextRequest) {
   try {
+    if (!isSameOrigin(request)) {
+      return NextResponse.json({ success: false, error: 'Invalid origin' }, { status: 403 });
+    }
+    const existingHash = await getProfileSetting('password_hash');
+    if (existingHash) {
+      const session = await getSession(request);
+      if (!session?.verified) {
+        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+      }
+    }
     const body = await request.json();
     const { password, enabled } = body;
 
-    if (enabled && (!password || password.length < 4)) {
+    if (enabled && (!password || password.length < 12)) {
       return NextResponse.json(
-        { success: false, error: 'Password minimal 4 karakter' },
+        { success: false, error: 'Password minimal 12 karakter' },
         { status: 400 }
       );
     }
 
     if (enabled) {
-      const hash = await hashPassword(password);
+      const hash = hashPassword(password);
       await setProfileSetting('password_hash', hash);
       await setProfileSetting('password_enabled', 'true');
     } else {

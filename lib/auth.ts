@@ -5,7 +5,13 @@ const SESSION_NAME = 'adimology_session';
 const SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 hours
 
 // Use AUTH_SECRET from env or fallback for dev (Warning during production)
-const AUTH_SECRET = process.env.AUTH_SECRET || 'dev_secret_please_change_in_production';
+function getAuthSecret(): string {
+  const secret = process.env.AUTH_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error('AUTH_SECRET must be configured with at least 32 characters');
+  }
+  return secret;
+}
 
 /**
  * Basic HMAC-based token signing using Web Crypto API
@@ -13,7 +19,7 @@ const AUTH_SECRET = process.env.AUTH_SECRET || 'dev_secret_please_change_in_prod
  */
 async function getCryptoKey() {
   const encoder = new TextEncoder();
-  const keyData = encoder.encode(AUTH_SECRET);
+  const keyData = encoder.encode(getAuthSecret());
   return await crypto.subtle.importKey(
     'raw',
     keyData,

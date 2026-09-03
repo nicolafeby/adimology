@@ -26,6 +26,8 @@ jobs:
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+      TOKEN_SYNC_SECRET: ${{ secrets.TOKEN_SYNC_SECRET }}
+      TOKEN_ENCRYPTION_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
       GEMINI_STORY_MODELS: ${{ vars.GEMINI_STORY_MODELS }}
       SCREENER_UNIVERSE_LIMIT: ${{ vars.SCREENER_UNIVERSE_LIMIT }}
       SCREENER_DEEP_LIMIT: ${{ vars.SCREENER_DEEP_LIMIT }}
@@ -48,6 +50,8 @@ jobs:
           test -n "$SUPABASE_SERVICE_ROLE_KEY" || { echo "SUPABASE_SERVICE_ROLE_KEY is required"; exit 1; }
           test -n "$GEMINI_API_KEY" || { echo "GEMINI_API_KEY is required"; exit 1; }
           test -n "$AUTH_SECRET" || { echo "AUTH_SECRET is required"; exit 1; }
+          test -n "$TOKEN_SYNC_SECRET" || { echo "TOKEN_SYNC_SECRET is required"; exit 1; }
+          test -n "$TOKEN_ENCRYPTION_KEY" || { echo "TOKEN_ENCRYPTION_KEY is required"; exit 1; }
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -110,7 +114,7 @@ jobs:
           const names = [
             'NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_ANON_KEY',
             'SUPABASE_SERVICE_ROLE_KEY', 'STOCKBIT_JWT_TOKEN', 'CRON_SECRET',
-            'GEMINI_API_KEY', 'AUTH_SECRET',
+            'GEMINI_API_KEY', 'AUTH_SECRET', 'TOKEN_SYNC_SECRET', 'TOKEN_ENCRYPTION_KEY',
             'GEMINI_STORY_MODELS', 'SCREENER_UNIVERSE_LIMIT',
             'SCREENER_DEEP_LIMIT', 'SCREENER_AI_LIMIT'
           ];

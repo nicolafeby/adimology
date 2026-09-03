@@ -7,7 +7,7 @@ const SESSION_NAME = 'adimology_session';
 const PUBLIC_PATHS = [
   '/api/auth/verify-password',
   '/api/auth/check-password',
-  '/api/auth/set-password', // Allow initial setup
+  '/api/auth/set-password', // Route itself permits only initial setup or a verified session
   '/api/update-token', // Allow the Chrome extension to sync the Stockbit token
   '/api/version', // Allow deployment health checks without a user session
 ];

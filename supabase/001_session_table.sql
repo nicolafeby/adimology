@@ -12,10 +12,8 @@ CREATE TABLE IF NOT EXISTS session (
 -- Create index for faster key lookup
 CREATE INDEX IF NOT EXISTS idx_session_key ON session(key);
 
--- Enable Row Level Security (optional, adjust based on your needs)
--- ALTER TABLE session ENABLE ROW LEVEL SECURITY;
-
--- Example: Allow all operations for service role (adjust as needed)
--- CREATE POLICY "Allow all for service role" ON session
---   USING (true)
---   WITH CHECK (true);
+-- Tokens must only be accessed through the server-side service role.
+ALTER TABLE session ENABLE ROW LEVEL SECURITY;
+ALTER TABLE session FORCE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE session FROM anon, authenticated;
+REVOKE ALL ON SEQUENCE session_id_seq FROM anon, authenticated;

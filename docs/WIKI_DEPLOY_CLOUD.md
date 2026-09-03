@@ -39,6 +39,9 @@ Agar migrasi otomatis dapat berjalan, Anda perlu menyiapkan infrastruktur pelaca
    | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon key dari Supabase langkah A1 no 3| ✅ |
    | `CRON_SECRET` | String acak untuk keamanan cron | ✅ |
    | `GEMINI_API_KEY` | API Key dari [Google AI Studio](https://aistudio.google.com/) | ✅ |
+   | `AUTH_SECRET` | Hasil `openssl rand -base64 48` | ✅ |
+   | `TOKEN_SYNC_SECRET` | Hasil `openssl rand -base64 32` | ✅ |
+   | `TOKEN_ENCRYPTION_KEY` | Hasil `openssl rand -base64 32` | ✅ |
 
 7. Klik **Deploy site** dan tunggu hingga selesai
 8. Catat URL Netlify Anda (contoh: `https://your-app.netlify.app`) akan digunakan untuk proses berikutnya 
@@ -64,6 +67,7 @@ Agar migrasi otomatis dapat berjalan, Anda perlu menyiapkan infrastruktur pelaca
 5. Edit `background.js` - ganti `APP_API_URL` dengan URL Netlify Anda:
    ```javascript
    const APP_API_URL = "https://your-app.netlify.app/api/update-token";
+   const TOKEN_SYNC_SECRET = "nilai-yang-sama-dengan-env";
    ```
 
 6. Install ekstensi di Chrome:

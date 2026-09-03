@@ -5,7 +5,6 @@ import { useState, useEffect, useRef } from 'react';
 type TokenStatusData = {
   exists: boolean;
   isValid: boolean;
-  token?: string;
   expiresAt?: string;
   lastUsedAt?: string;
   updatedAt?: string;

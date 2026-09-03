@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import type { IdxListedCompany } from './idx';
+import { decryptSecret, encryptSecret, isSensitiveSessionKey } from './secret-storage';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -75,7 +76,7 @@ export async function getSessionValue(key: string): Promise<string | null> {
     .single();
 
   if (error || !data) return null;
-  return data.value;
+  return isSensitiveSessionKey(key) ? decryptSecret(data.value) : data.value;
 }
 
 /**
@@ -84,7 +85,6 @@ export async function getSessionValue(key: string): Promise<string | null> {
 export interface TokenStatus {
   exists: boolean;
   isValid: boolean;
-  token?: string;
   expiresAt?: string;
   lastUsedAt?: string;
   updatedAt?: string;
@@ -123,7 +123,6 @@ export async function getTokenStatus(): Promise<TokenStatus> {
   return {
     exists: true,
     isValid: data.is_valid !== false && !isExpired,
-    token: data.value,
     expiresAt: data.expires_at,
     lastUsedAt: data.last_used_at,
     updatedAt: data.updated_at,
@@ -141,12 +140,13 @@ export async function upsertSession(
   value: string, 
   expiresAt?: Date
 ) {
+  const storedValue = isSensitiveSessionKey(key) ? encryptSecret(value) : value;
   const { data, error } = await getSupabaseAdmin()
     .from('session')
     .upsert(
       { 
         key, 
-        value, 
+        value: storedValue,
         updated_at: new Date().toISOString(),
         expires_at: expiresAt?.toISOString() || null,
         is_valid: true,

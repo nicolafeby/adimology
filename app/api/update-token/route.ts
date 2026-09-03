@@ -1,26 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { upsertSession } from '@/lib/supabase';
+import { secretsEqual } from '@/lib/request-security';
 
 export async function OPTIONS() {
   return new NextResponse(null, {
     status: 204,
     headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Allow-Origin': 'null',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, X-Token-Sync-Secret',
     },
   });
 }
 
 export async function POST(request: NextRequest) {
   try {
+    if (!secretsEqual(request.headers.get('x-token-sync-secret'), process.env.TOKEN_SYNC_SECRET)) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
     const body = await request.json();
     const { token, expires_at } = body;
 
     if (!token) {
       return NextResponse.json(
         { success: false, error: 'Token is required' },
-        { status: 400, headers: { 'Access-Control-Allow-Origin': '*' } }
+        { status: 400 }
       );
     }
 
@@ -39,14 +43,12 @@ export async function POST(request: NextRequest) {
       success: true,
       message: 'Token updated successfully',
       expires_at: expiresAtDate,
-    }, {
-      headers: { 'Access-Control-Allow-Origin': '*' }
     });
   } catch (error: unknown) {
     console.error('Update Token Error:', error);
     return NextResponse.json(
       { success: false, error: 'Failed to update token' },
-      { status: 500, headers: { 'Access-Control-Allow-Origin': '*' } }
+      { status: 500 }
     );
   }
 }

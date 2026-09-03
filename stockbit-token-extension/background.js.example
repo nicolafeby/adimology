@@ -1,0 +1,25 @@
+// Use localhost for local development, or your own HTTPS application URL.
+const APP_API_URL = "http://localhost:3000/api/update-token";
+const TOKEN_SYNC_SECRET = "REPLACE_WITH_TOKEN_SYNC_SECRET";
+let lastSyncedToken = null;
+
+function parseJwt(token) {
+  try {
+    const payload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(decodeURIComponent(atob(payload).split('').map((character) =>
+      `%${(`00${character.charCodeAt(0).toString(16)}`).slice(-2)}`).join('')));
+  } catch { return null; }
+}
+
+chrome.webRequest.onBeforeSendHeaders.addListener((details) => {
+  const header = details.requestHeaders?.find((item) => item.name.toLowerCase() === 'authorization');
+  if (!header?.value?.startsWith('Bearer ')) return;
+  const token = header.value.slice(7);
+  const payload = parseJwt(token);
+  if (!payload?.exp || token === lastSyncedToken) return;
+  fetch(APP_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Token-Sync-Secret': TOKEN_SYNC_SECRET },
+    body: JSON.stringify({ token, expires_at: payload.exp }),
+  }).then((response) => { if (response.ok) lastSyncedToken = token; });
+}, { urls: ['https://*.stockbit.com/*'] }, ['requestHeaders', 'extraHeaders']);

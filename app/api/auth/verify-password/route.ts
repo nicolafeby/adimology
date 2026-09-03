@@ -1,17 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getProfileSetting } from '@/lib/supabase';
+import { setProfileSetting } from '@/lib/supabase';
 import { setSession } from '@/lib/auth';
-
-async function hashPassword(password: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
+import { hashPassword, isLegacyPasswordHash, verifyPassword } from '@/lib/password';
+import { isSameOrigin } from '@/lib/request-security';
 
 export async function POST(request: NextRequest) {
   try {
+    if (!isSameOrigin(request)) {
+      return NextResponse.json({ success: false, error: 'Invalid origin' }, { status: 403 });
+    }
     const body = await request.json();
     const { password } = body;
 
@@ -31,10 +29,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const inputHash = await hashPassword(password);
-    const valid = inputHash === storedHash;
+    const valid = verifyPassword(password, storedHash);
 
     if (valid) {
+      if (isLegacyPasswordHash(storedHash)) {
+        await setProfileSetting('password_hash', hashPassword(password));
+      }
       const response = NextResponse.json({ success: true, valid: true });
       await setSession(response);
       return response;

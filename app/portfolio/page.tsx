@@ -79,8 +79,6 @@ export default function PortfolioPage() {
       </div>
     </header>
 
-    <nav className="portfolio-tabs" aria-label="Navigasi akun"><button className="active">Portfolio</button><button disabled title="Segera hadir">Order</button><button disabled title="Segera hadir">History</button></nav>
-
     <section className="portfolio-account-strip">
       <div><strong>{value(totals.tradingBalance)}</strong><span>Trading Balance</span></div>
       <div><strong>{value(totals.invested ?? calculated.invested)}</strong><span>Invested</span></div>

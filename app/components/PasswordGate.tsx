@@ -31,8 +31,9 @@ export default function PasswordGate({ children }: PasswordGateProps) {
         setStatus('unlocked');
       }
     } catch {
-      // If check fails, allow access to prevent locking out on network error
-      setStatus('unlocked');
+      // Fail closed: a backend/network failure must never bypass the gate.
+      setError('Status keamanan tidak dapat diverifikasi. Muat ulang halaman.');
+      setStatus('locked');
     }
   };
 

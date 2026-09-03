@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "Stockbit Token Syncer",
+  "version": "1.1",
+  "description": "Captures a Stockbit Bearer token and syncs it to your protected API.",
+  "permissions": ["webRequest"],
+  "host_permissions": ["https://*.stockbit.com/*", "http://localhost:3000/*"],
+  "background": { "service_worker": "background.js" }
+}

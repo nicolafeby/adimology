@@ -43,6 +43,9 @@ Ikuti langkah-langkah berikut secara berurutan:
    NEXT_PUBLIC_SUPABASE_URL=https://xxxxx.supabase.co
    NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
    GEMINI_API_KEY=AIzaSy...
+   AUTH_SECRET=<minimal 32 karakter>
+   TOKEN_SYNC_SECRET=<secret acak>
+   TOKEN_ENCRYPTION_KEY=<base64 32-byte>
    ```
 
    | Variable | Nilai | Wajib |
@@ -51,6 +54,9 @@ Ikuti langkah-langkah berikut secara berurutan:
    | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon key dari Supabase | ✅ |
    | `GEMINI_API_KEY` | API Key dari [Google AI Studio](https://aistudio.google.com/) | ✅ |
    | `STOCKBIT_JWT_TOKEN` | Token manual (opsional, ekstensi lebih baik) | ❌ |
+   | `AUTH_SECRET` | Hasil `openssl rand -base64 48` | ✅ |
+   | `TOKEN_SYNC_SECRET` | Hasil `openssl rand -base64 32` | ✅ |
+   | `TOKEN_ENCRYPTION_KEY` | Hasil `openssl rand -base64 32` | ✅ |
 
 ## B3. Jalankan Aplikasi
 
@@ -84,6 +90,7 @@ AI Story dan retry screener dijalankan langsung oleh server Next.js. Tidak diper
 4. Edit `background.js` - set `APP_API_URL` ke localhost:
    ```javascript
    const APP_API_URL = "http://localhost:3000/api/update-token";
+   const TOKEN_SYNC_SECRET = "nilai-yang-sama-dengan-env";
    ```
 
 5. Install ekstensi di Chrome:

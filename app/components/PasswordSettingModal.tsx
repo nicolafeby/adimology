@@ -64,8 +64,8 @@ export default function PasswordSettingModal({ isOpen, onClose }: PasswordSettin
         setError('Password tidak boleh kosong.');
         return;
       }
-      if (password.length < 4) {
-        setError('Password minimal 4 karakter.');
+      if (password.length < 12) {
+        setError('Password minimal 12 karakter.');
         return;
       }
       if (password !== confirmPassword) {

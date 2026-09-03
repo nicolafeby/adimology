@@ -141,6 +141,20 @@ export interface ComprehensiveAnalysis {
   warnings: string[];
 }
 
+export type DecisionVerdict = 'ACTIONABLE' | 'WAIT' | 'AVOID';
+
+export interface TradeDecision {
+  verdict: DecisionVerdict;
+  verdictLabel: string;
+  rationale: string;
+  entryLow: number;
+  entryHigh: number;
+  stop: number;
+  target: number;
+  riskReward: number | null;
+  invalidation: string;
+}
+
 export type TrendSignal = 'early_uptrend' | 'confirmed_uptrend' | 'watch' | 'avoid';
 
 export interface RankingReason {

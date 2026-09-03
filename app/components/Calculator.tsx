@@ -10,6 +10,7 @@ import PriceGraph from './PriceGraph';
 import OrderbookCard from './OrderbookCard';
 import EmitenHistoryCard from './EmitenHistoryCard';
 import AnalysisScoreCard from './AnalysisScoreCard';
+import DecisionCard from './DecisionCard';
 
 import * as htmlToImage from 'html-to-image';
 import type { StockInput, StockAnalysisResult, KeyStatsData, AgentStoryResult } from '@/lib/types';
@@ -477,7 +478,8 @@ export default function Calculator({ selectedStock }: CalculatorProps) {
             )}
 
             {result.comprehensiveAnalysis && (
-              <div style={{ gridColumn: '1 / -1', width: '100%' }}>
+              <div className="analysis-decision-grid">
+                <DecisionCard result={result} />
                 <AnalysisScoreCard analysis={result.comprehensiveAnalysis} />
               </div>
             )}

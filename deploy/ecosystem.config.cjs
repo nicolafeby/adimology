@@ -21,6 +21,8 @@ module.exports = {
         NODE_ENV: "production",
         HOSTNAME: "0.0.0.0",
         PORT: process.env.APP_PORT || "3100",
+        DEPLOY_SHA: process.env.GITHUB_SHA || "unknown",
+        DEPLOYED_AT: process.env.DEPLOYED_AT || "unknown",
       },
     },
   ],

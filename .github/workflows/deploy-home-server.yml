@@ -126,6 +126,50 @@ jobs:
         env:
           RELEASE_PATH: ${{ steps.release.outputs.release_path }}
         run: |
+          export DEPLOYED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           ln -sfn "$RELEASE_PATH" "$DEPLOY_PATH/current"
           npx --no-install pm2 startOrReload deploy/ecosystem.config.cjs --update-env
           npx --no-install pm2 save
+
+      - name: Verify active release
+        run: |
+          node <<'NODE'
+          const expectedSha = process.env.GITHUB_SHA;
+          const port = process.env.APP_PORT;
+          const url = `http://127.0.0.1:${port}/api/version`;
+          const deadline = Date.now() + 30_000;
+
+          async function verify() {
+            let lastError;
+
+            while (Date.now() < deadline) {
+              try {
+                const response = await fetch(url, { cache: 'no-store' });
+                const body = await response.json();
+
+                if (!response.ok) {
+                  throw new Error(`HTTP ${response.status}`);
+                }
+
+                if (body.sha !== expectedSha) {
+                  throw new Error(
+                    `commit mismatch: expected ${expectedSha}, received ${body.sha}`,
+                  );
+                }
+
+                console.log(`Release ${body.sha} aktif di port ${port}`);
+                return;
+              } catch (error) {
+                lastError = error;
+                await new Promise((resolve) => setTimeout(resolve, 1_000));
+              }
+            }
+
+            throw new Error(`Deployment verification failed: ${lastError}`);
+          }
+
+          verify().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE

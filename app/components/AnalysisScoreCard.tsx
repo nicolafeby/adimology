@@ -8,15 +8,24 @@ const formatMetric = (value: number | string | null, unit?: string) => {
 
 export default function AnalysisScoreCard({ analysis }: { analysis: ComprehensiveAnalysis }) {
   const completeness = analysis.dataCompleteness ?? analysis.confidence;
+  const indicators = [
+    { label: 'Kelengkapan data', value: completeness, title: 'Persentase bobot komponen yang datanya tersedia.' },
+    { label: 'Confidence', value: analysis.confidence, title: 'Reliabilitas bukti di dalam komponen yang tersedia.' },
+    { label: 'Agreement', value: analysis.agreement ?? 0, title: 'Keselarasan skor antar-komponen yang tersedia.' },
+  ];
   return (
     <section className="analysis-score-card">
       <div className="analysis-score-header">
         <div><span>Analisis Multi-Faktor · {analysis.horizon}</span><h3>{analysis.label}</h3></div>
         <div className="analysis-score-gauge" aria-label={`Skor ${analysis.score} dari 100`}><strong>{analysis.score}</strong><span>/100</span></div>
       </div>
-      <div className="analysis-confidence">
-        <span>Kelengkapan data</span><strong>{completeness}%</strong>
-        <div><i style={{ width: `${completeness}%` }} /></div>
+      <div className="analysis-indicators">
+        {indicators.map((indicator) => (
+          <div className="analysis-indicator" key={indicator.label} title={indicator.title}>
+            <span>{indicator.label}</span><strong>{indicator.value}%</strong>
+            <div><i style={{ width: `${indicator.value}%` }} /></div>
+          </div>
+        ))}
       </div>
       <div className="analysis-components">
         {analysis.components.map((component) => (

@@ -1233,14 +1233,14 @@ export async function getBacktestRows() {
   const db = getSupabaseAdmin();
   const [{ data: outcomes, error: outcomeError }, { data: snapshots, error: snapshotError }] = await Promise.all([
     db.from('signal_outcomes').select('*'),
-    db.from('signal_snapshots').select('id, score, signal, model_version, feature_snapshot'),
+    db.from('signal_snapshots').select('id, signal_date, score, signal, model_version, feature_snapshot'),
   ]);
   if (outcomeError) throw outcomeError;
   if (snapshotError) throw snapshotError;
   const snapshotMap = new Map((snapshots ?? []).map((row) => [row.id, row]));
   return (outcomes ?? []).map((row) => {
     const snapshot = snapshotMap.get(row.snapshot_id);
-    return { ...row, snapshot, model_probability: snapshot?.feature_snapshot?.model_probability ?? null };
+    return { ...row, signal_date: snapshot?.signal_date ?? null, snapshot, model_probability: snapshot?.feature_snapshot?.model_probability ?? null };
   });
 }
 

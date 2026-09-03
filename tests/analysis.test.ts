@@ -3,7 +3,7 @@ import test from 'node:test';
 import { calculateTargets, getFraksi } from '../lib/calculations';
 import { buildComprehensiveAnalysis } from '../lib/analysis';
 import { preScreenHistory, classifyTrend } from '../lib/ranking';
-import { summarizeBacktest } from '../lib/backtest';
+import { netReturnPercent, summarizeBacktest } from '../lib/backtest';
 
 test('legacy target calculation remains stable for valid inputs', () => {
   const result = calculateTargets(1000, 5000, 1200, 800, 10000, 10000, 1000);
@@ -34,14 +34,27 @@ test('pre-screen requires liquid momentum with volume confirmation', () => {
 test('trend classifier does not confirm incomplete analysis', () => {
   const analysis = buildComprehensiveAnalysis({ lastPrice: 1000 });
   assert.equal(classifyTrend(analysis).signal, 'avoid');
-  assert.equal(analysis.dataCompleteness, analysis.confidence);
+  assert.equal(analysis.dataCompleteness, 0);
+  assert.equal(analysis.confidence, 0);
+  assert.equal(analysis.agreement, 0);
 });
 
 test('backtest summary calculates objective ten-day win rate', () => {
-  const summary = summarizeBacktest([{ return_10d: 5, target_hit: true, stop_hit: false }, { return_10d: -2, target_hit: false, stop_hit: true }]);
+  const summary = summarizeBacktest([{ signal_date: '2026-01-01', return_10d: 5, target_hit: true, stop_hit: false }, { signal_date: '2026-01-02', return_10d: -2, target_hit: false, stop_hit: true }], { buyFeePercent: 0, sellFeePercent: 0, slippagePercentPerSide: 0 });
   assert.equal(summary.sampleSize, 2);
   assert.equal(summary.winRate10d, 0.5);
   assert.equal(summary.averageReturn10d, 1.5);
+  assert.equal(summary.expectancy10d, 1.5);
+  assert.ok(Math.abs((summary.maxDrawdown10d ?? 0) - 2) < 1e-10);
+});
+
+test('backtest applies fees and two-sided slippage before classifying a win', () => {
+  const net = netReturnPercent(0.5, { buyFeePercent: 0.15, sellFeePercent: 0.25, slippagePercentPerSide: 0.1 });
+  assert.ok(net < 0);
+  const summary = summarizeBacktest([{ return_10d: 0.5 }]);
+  assert.equal(summary.winRate10d, 0);
+  assert.equal(summary.grossAverageReturn10d, 0.5);
+  assert.ok((summary.expectancy10d ?? 0) < 0);
 });
 
 test('catalyst component uses structured AI score without keyword heuristics', () => {
@@ -70,8 +83,26 @@ test('comprehensive score excludes unavailable components and reports coverage',
   const result = buildComprehensiveAnalysis({ lastPrice: 1000 });
   assert.equal(result.score, 50);
   assert.equal(result.confidence, 0);
+  assert.equal(result.agreement, 0);
   assert.equal(result.components.length, 7);
   assert.ok(result.warnings.length > 0);
+});
+
+test('completeness, confidence, and agreement measure different properties', () => {
+  const result = buildComprehensiveAnalysis({
+    lastPrice: 1000,
+    orderbook: {
+      bid: [{ price: 995, volume: 20_000, queues: 10, changePercentage: 0 }],
+      offer: [{ price: 1000, volume: 5_000, queues: 8, changePercentage: 0 }],
+    },
+    catalyst: {
+      swot_analysis: { ai_scoring: { score: 20, confidence: 40, sentiment: 'negative', rationale: 'Bukti terbatas.', positive_catalysts: [], negative_risks: [] } },
+    },
+  });
+  assert.equal(result.dataCompleteness, 20);
+  assert.equal(result.confidence, 53);
+  assert.notEqual(result.agreement, result.confidence);
+  assert.notEqual(result.agreement, result.dataCompleteness);
 });
 
 test('liquidity metrics use best prices and near-touch depth', () => {

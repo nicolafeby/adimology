@@ -132,8 +132,10 @@ export interface ComprehensiveAnalysis {
   score: number;
   /** Percentage of weighted inputs that were available. */
   dataCompleteness: number;
-  /** @deprecated Use dataCompleteness. Kept for older clients. */
+  /** Reliability of the evidence inside the available inputs. */
   confidence: number;
+  /** Degree to which the available component scores point in the same direction. */
+  agreement: number;
   label: 'Kuat' | 'Positif' | 'Netral' | 'Hati-hati' | 'Lemah';
   horizon: string;
   generatedAt: string;
@@ -152,7 +154,27 @@ export interface TradeDecision {
   stop: number;
   target: number;
   riskReward: number | null;
+  atrPercent: number | null;
+  atrMultiplier: number;
+  stopDistancePercent: number;
+  riskPerShare: number;
+  accountSize: number;
+  riskPercent: number;
+  riskBudget: number;
+  positionShares: number;
+  positionLots: number;
+  positionValue: number;
+  positionRisk: number;
   invalidation: string;
+}
+
+export interface PositionSizingOptions {
+  /** Total trading capital available, in rupiah. */
+  accountSize: number;
+  /** Maximum capital at risk if the stop is hit, in percent. */
+  riskPercent: number;
+  /** ATR multiple used to place the stop. */
+  atrMultiplier?: number;
 }
 
 export type TrendSignal = 'early_uptrend' | 'confirmed_uptrend' | 'watch' | 'avoid';
@@ -185,6 +207,14 @@ export interface BacktestSummary {
   winRate10d: number | null;
   winRate20d: number | null;
   averageReturn10d: number | null;
+  grossAverageReturn10d: number | null;
+  expectancy10d: number | null;
+  maxDrawdown10d: number | null;
+  costAssumptions: {
+    buyFeePercent: number;
+    sellFeePercent: number;
+    slippagePercentPerSide: number;
+  };
   targetHitRate: number | null;
   stopHitRate: number | null;
   brierScore: number | null;

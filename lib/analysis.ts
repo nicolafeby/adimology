@@ -219,10 +219,22 @@ export function buildComprehensiveAnalysis(input: {
     ? Math.round(available.reduce((sum, x) => sum + (x.score ?? 0) * x.weight, 0) / availableWeight)
     : 50;
   const dataCompleteness = Math.round((availableWeight / components.reduce((sum, x) => sum + x.weight, 0)) * 100);
+  const componentConfidence = (component: AnalysisComponent) => {
+    if (component.key === 'catalyst' && aiScoring) return clamp(aiScoring.confidence);
+    if (!component.metrics.length) return 0;
+    const usableMetrics = component.metrics.filter((item) => item.signal !== 'unavailable' && item.value !== null).length;
+    return (usableMetrics / component.metrics.length) * 100;
+  };
+  const confidence = availableWeight > 0
+    ? Math.round(available.reduce((sum, component) => sum + componentConfidence(component) * component.weight, 0) / availableWeight)
+    : 0;
+  const agreement = available.length >= 2
+    ? Math.round(clamp(100 - (available.reduce((sum, component) => sum + Math.abs((component.score ?? score) - score) * component.weight, 0) / availableWeight) * 2))
+    : 0;
   const label: ComprehensiveAnalysis['label'] = score >= 75 ? 'Kuat' : score >= 60 ? 'Positif' : score >= 45 ? 'Netral' : score >= 30 ? 'Hati-hati' : 'Lemah';
   const missing = components.filter((x) => !x.available).map((x) => x.label);
   return {
-    score, dataCompleteness, confidence: dataCompleteness, label, horizon: 'Swing 5–20 hari', generatedAt: new Date().toISOString(), components,
+    score, dataCompleteness, confidence, agreement, label, horizon: 'Swing 5–20 hari', generatedAt: new Date().toISOString(), components,
     warnings: missing.length ? [`Komponen belum tersedia dan tidak dihitung: ${missing.join(', ')}.`] : [],
   };
 }

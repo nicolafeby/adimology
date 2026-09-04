@@ -5,7 +5,7 @@ import { fetchEmitenInfo, fetchHistoricalSummary, fetchKeyStats, fetchMarketDete
 import { calculateMarketRegime, calculateRelativeStrength } from './market-regime';
 import type { HistoricalSummaryItem } from './stockbit';
 
-export async function analyzeSymbol(symbol: string, analysisDate: string, benchmarks: { marketHistory?: HistoricalSummaryItem[]; sectorHistory?: HistoricalSummaryItem[] } = {}) {
+export async function analyzeSymbol(symbol: string, analysisDate: string, benchmarks: { stockHistory?: HistoricalSummaryItem[]; marketHistory?: HistoricalSummaryItem[]; sectorHistory?: HistoricalSummaryItem[] } = {}) {
   const emiten = symbol.trim().toUpperCase();
   const start = new Date(`${analysisDate}T00:00:00Z`);
   // Keep the range within the historical-summary API's accepted window while
@@ -19,9 +19,9 @@ export async function analyzeSymbol(symbol: string, analysisDate: string, benchm
     fetchMarketDetector(emiten, detectorStart, analysisDate),
     fetchOrderbook(emiten),
     fetchEmitenInfo(emiten).catch(() => null),
-    fetchHistoricalSummary(emiten, historyStart, analysisDate, 100).catch(() => []),
+    benchmarks.stockHistory ? Promise.resolve(benchmarks.stockHistory) : fetchHistoricalSummary(emiten, historyStart, analysisDate, 45).catch(() => []),
     fetchKeyStats(emiten).catch(() => undefined),
-    benchmarks.marketHistory ? Promise.resolve(benchmarks.marketHistory) : fetchHistoricalSummary('COMPOSITE', historyStart, analysisDate, 100).catch(() => []),
+    benchmarks.marketHistory ? Promise.resolve(benchmarks.marketHistory) : fetchHistoricalSummary('COMPOSITE', historyStart, analysisDate, 45).catch(() => []),
     getRecentStockQueries(emiten).catch(() => []),
     getLatestCompletedAgentStory(emiten).catch(() => null),
   ]);

@@ -1203,6 +1203,27 @@ export async function getStockRankings(date?: string, limit = 10) {
   return [...uniqueRanks.values()].slice(0, limit);
 }
 
+export async function commitScreeningRun(run: { id: string; analysis_date: string; universe_count: number; started_at: string }, results: Array<Record<string, unknown>>) {
+  const { error } = await getSupabaseAdmin().rpc('commit_screening_run', { p_run: run, p_results: results });
+  if (error) throw error;
+}
+
+export async function getLatestScreeningRun(date?: string) {
+  const db = getSupabaseAdmin();
+  let query = db.from('screening_runs').select('*').eq('status', 'completed');
+  if (date) query = query.eq('analysis_date', date);
+  const { data: run, error } = await query.order('analysis_date', { ascending: false }).order('completed_at', { ascending: false }).limit(1).maybeSingle();
+  if (error) {
+    // Deployments that have not run migration 022 continue through legacy hydration.
+    if (error.code === '42P01' || error.code === 'PGRST205') return null;
+    throw error;
+  }
+  if (!run) return null;
+  const { data, error: resultsError } = await db.from('screening_results').select('*').eq('run_id', run.id);
+  if (resultsError) throw resultsError;
+  return { run, results: data ?? [] };
+}
+
 export async function getStockRankingDetail(symbol: string, date?: string) {
   const db = getSupabaseAdmin();
   let rankingQuery = db.from('stock_rankings').select('*').eq('symbol', symbol.toUpperCase());

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { BacktestSummary, StockRanking } from '@/lib/types';
 import { rankingModelBadge } from '@/lib/model-versions';
 import RankingDetailModal, { buildDetailSummary, type RankingDetailData } from '@/app/components/RankingDetailModal';
+import type { ScreeningResult } from '@/lib/screening';
 
 interface UniverseCompany { symbol: string; company_name: string; sector?: string | null; board?: string | null }
 
@@ -16,6 +17,8 @@ const summarizeRunError = (message: string) => message.includes('429') || messag
 
 export default function RankingsPage() {
   const [rankings, setRankings] = useState<StockRanking[]>([]);
+  const [screeningSummary, setScreeningSummary] = useState({ universe: 0, evaluated: 0, passed: 0, watch: 0, rejected: 0, processingError: 0 });
+  const [otherResults, setOtherResults] = useState<{ watch: ScreeningResult[]; rejected: ScreeningResult[]; processingError: ScreeningResult[] }>({ watch: [], rejected: [], processingError: [] });
   const [date, setDate] = useState('');
   const [summary, setSummary] = useState<BacktestSummary | null>(null);
   const [alerts, setAlerts] = useState<Array<{ id: number; symbol: string; status: string; created_at: string }>>([]);
@@ -39,7 +42,9 @@ export default function RankingsPage() {
       const alertJson = await alertResponse.json();
       const universeJson = await universeResponse.json();
       if (!rankingJson.success) throw new Error(rankingJson.error || 'Ranking tidak dapat dimuat');
-      setRankings(rankingJson.data ?? []); setDate(rankingJson.date ?? '');
+      setRankings(rankingJson.data ?? []); setDate(rankingJson.analysisDate ?? rankingJson.date ?? '');
+      if (rankingJson.summary) setScreeningSummary(rankingJson.summary);
+      if (rankingJson.results) setOtherResults({ watch: rankingJson.results.watch ?? [], rejected: rankingJson.results.rejected ?? [], processingError: rankingJson.results.processingError ?? [] });
       if (backtestJson.success) setSummary(backtestJson.summary);
       if (alertJson.success) setAlerts(alertJson.data ?? []);
       if (universeJson.success) setUniverse(universeJson.data ?? []);
@@ -52,10 +57,10 @@ export default function RankingsPage() {
   const runScreener = async () => {
     setRunning(true); setError(''); setRunErrors([]); setRunMessage('Mengambil histori dan menganalisis kandidat. Proses ini dapat memakan beberapa menit…');
     try {
-      const response = await fetch('/api/screener/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ deepLimit: 50, aiLimit: 10, concurrency: 4 }) });
+      const response = await fetch('/api/screener/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ deepLimit: 100, aiLimit: 10, concurrency: 4 }) });
       const json = await response.json();
       if (!json.success) throw new Error(json.error || 'Screener gagal dijalankan');
-      setRunMessage(`Selesai: ${json.progress.analyzed} dianalisis kuantitatif dan ${json.progress.quantitativeSnapshots ?? json.progress.analyzed} snapshot disimpan, ${json.progress.aiCompleted}/${json.progress.aiRequested} divalidasi AI Story (${json.progress.aiReused} memakai hasil terbaru), ${json.rankings.length} ditampilkan dalam ranking final, ${json.progress.errors.length} error. Outcome Watch/Avoid yang valid tetap masuk dataset kalibrasi, bukan disembunyikan.`);
+      setRunMessage(`Selesai: ${json.summary.passed} passed, ${json.summary.watch} watch, ${json.summary.rejected} rejected, dan ${json.summary.processingError} processing error dari ${json.summary.universe} emiten.`);
       setRunErrors(json.progress.errors ?? []);
       await load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Screener gagal dijalankan'); setRunMessage(''); }
@@ -75,14 +80,15 @@ export default function RankingsPage() {
   return (
     <main className="ranking-page">
       <header className="ranking-hero">
-        <div><span className="ranking-eyebrow">Market screener · {date || 'belum dijalankan'} · {universe.length.toLocaleString('id-ID')} emiten IDX</span><h1>Top 10 Kandidat Naik</h1><p>Ranking final menggabungkan data kuantitatif, broker flow, fundamental, orderbook, dan validasi AI Story berbasis berita terbaru untuk swing 5–20 hari.</p></div>
+        <div><span className="ranking-eyebrow">Market screener · {date || 'belum dijalankan'} · {universe.length.toLocaleString('id-ID')} emiten IDX</span><h1>Screener Saham</h1><p>Hasil dipisahkan secara tegas berdasarkan hard filter, kualitas data, konfirmasi, dan kegagalan proses.</p></div>
         <div className="ranking-actions"><button className="ranking-secondary-btn" onClick={load} disabled={loading || running}>{loading ? 'Memuat…' : 'Refresh'}</button><button className="ranking-run-btn" onClick={runScreener} disabled={loading || running}>{running ? 'Screening berjalan…' : 'Jalankan Screener'}</button></div>
       </header>
 
       {error && <div className="ranking-empty ranking-error">{error}</div>}
       {runMessage && <div className="ranking-run-status">{runMessage}</div>}
       {runErrors.length > 0 && <details className="ranking-run-errors"><summary>Lihat rincian {runErrors.length} error</summary><div>{runErrors.map((item, index) => <p key={`${item.symbol}-${index}`}><strong>{item.symbol}</strong><span>{summarizeRunError(item.error)}</span></p>)}</div></details>}
-      {!error && !loading && rankings.length === 0 && <div className="ranking-empty"><h2>Ranking belum tersedia</h2><p>Klik <strong>Jalankan Screener</strong>. Jika universe masih kosong, sistem akan mengimpor emiten dari cache watchlist Stockbit secara otomatis.</p></div>}
+      {!loading && <section className="screening-summary">{Object.entries({ Universe: screeningSummary.universe, Evaluated: screeningSummary.evaluated, Passed: screeningSummary.passed, Watch: screeningSummary.watch, Rejected: screeningSummary.rejected, 'Processing error': screeningSummary.processingError }).map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</section>}
+      {!error && !loading && rankings.length === 0 && <div className="ranking-empty"><h2>Tidak ada saham yang memenuhi seluruh kriteria screener pada snapshot ini.</h2><p>Status watch, rejected, dan processing error dapat diperiksa di bagian audit di bawah.</p></div>}
 
       <section className="ranking-grid">
         {rankings.map((row) => (
@@ -99,6 +105,10 @@ export default function RankingsPage() {
         ))}
       </section>
 
+      <section className="screening-audit">
+        {([['watch', 'Watch'], ['rejected', 'Rejected'], ['processingError', 'Processing error']] as const).map(([key, label]) => <details key={key}><summary>{label} ({otherResults[key].length})</summary><div className="screening-audit-list">{otherResults[key].map((row) => <article key={`${row.run_id}-${row.symbol}`}><header><strong>{row.symbol}</strong><span>{row.selection_stage.replaceAll('_', ' ')}</span></header>{row.failed_rules.map((rule) => <p key={rule.key}><b>{rule.label}:</b> {rule.explanation} <small>Aktual: {String(rule.actual_value ?? 'tidak tersedia')} · Syarat: {String(rule.required_value)}</small></p>)}</article>)}</div></details>)}
+      </section>
+
       <section className="ranking-lower-grid">
         <article className="ranking-panel"><h2>Validasi sinyal (neto)</h2>{summary?.sampleSize ? <><p className="ranking-note">Backtest · {summary.configVersion} · {summary.enteredTrades} entered trades · eksekusi {summary.executionModels.join(', ')}</p><div className="backtest-metrics"><div title="Rata-rata hasil bersih seluruh trade valid dalam unit risiko awal (R)."><span>Net expectancy</span><strong>{summary.expectancyR == null ? '—' : `${summary.expectancyR >= 0 ? '+' : ''}${summary.expectancyR.toFixed(2)}R/trade`}</strong></div><div><span>Avg net return</span><strong>{summary.averageReturn10d == null ? '—' : `${summary.averageReturn10d.toFixed(2)}%`}</strong></div><div><span>Net win rate</span><strong>{percent(summary.winRate10d)}</strong></div><div><span>Payoff ratio</span><strong>{summary.payoffRatio?.toFixed(2) ?? '—'}</strong></div><div><span>Profit factor</span><strong>{summary.profitFactor?.toFixed(2) ?? '—'}</strong></div><div title="Penurunan terburuk pada equity index berurutan; bukan simulasi portofolio overlap."><span>Max drawdown</span><strong>{summary.maxDrawdown10d == null ? '—' : `${summary.maxDrawdown10d.toFixed(2)}%`}</strong></div><div><span>No entry</span><strong>{summary.noEntryCount} / {summary.sampleSize}</strong></div><div><span>Ambiguous</span><strong>{summary.ambiguousCount}</strong></div><div title="Maximum Adverse Excursion selama posisi aktif."><span>Avg MAE</span><strong>{summary.averageMae == null ? '—' : `${summary.averageMae.toFixed(2)}%`}</strong></div><div title="Maximum Favorable Excursion selama posisi aktif."><span>Avg MFE</span><strong>{summary.averageMfe == null ? '—' : `${summary.averageMfe.toFixed(2)}%`}</strong></div></div><p className="ranking-note">Asumsi: beli {summary.costAssumptions.buyFeePercent}% · jual {summary.costAssumptions.sellFeePercent}% · slippage {summary.costAssumptions.slippagePercentPerSide}% per sisi ({summary.costAssumptions.slippageModel}). Sesuaikan dengan broker Anda. Drawdown: sequential/indexed approximation. Performa masa lalu tidak menjamin hasil berikutnya.</p></> : <p>Outcome belum cukup. Evaluator hanya mengisi hasil setelah tersedia 20 sesi perdagangan penuh.</p>}</article>
         <article className="ranking-panel"><h2>Alert terbaru</h2>{alerts.length ? <ul className="ranking-alerts">{alerts.map((alert) => <li key={alert.id}><Link href={`/?symbol=${alert.symbol}`}>{alert.symbol}</Link><span>{alert.status} · {new Date(alert.created_at).toLocaleString('id-ID')}</span></li>)}</ul> : <p>Belum ada alert yang lolos rule dan probabilitas minimum.</p>}</article>
@@ -107,7 +117,7 @@ export default function RankingsPage() {
         <div className="universe-header"><div><span className="ranking-eyebrow">Cakupan screener</span><h2>Seluruh Saham IDX</h2><p>{filteredUniverse.length.toLocaleString('id-ID')} dari {universe.length.toLocaleString('id-ID')} emiten</p></div><input value={universeSearch} onChange={(event) => setUniverseSearch(event.target.value)} placeholder="Cari kode, nama, atau sektor…" aria-label="Cari saham IDX" /></div>
         <div className="universe-list">{filteredUniverse.map((company) => <Link href={`/?symbol=${company.symbol}`} className="universe-item" key={company.symbol}><strong>{company.symbol}</strong><span>{company.company_name || '—'}</span><small>{company.sector || company.board || 'Sektor belum tersedia'}</small></Link>)}</div>
       </section>
-      <p className="ranking-disclaimer">Ranking merupakan alat bantu berbasis data, bukan rekomendasi membeli atau menjual saham.</p>
+      <p className="ranking-disclaimer">Screener merupakan alat bantu berbasis data. Status passed maupun watch bukan rekomendasi membeli atau menjual saham.</p>
       {detailOpen && <RankingDetailModal data={detailData} loading={detailLoading} error={detailError} onClose={() => setDetailOpen(false)} />}
     </main>
   );

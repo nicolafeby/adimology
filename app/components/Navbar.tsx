@@ -73,7 +73,7 @@ const Navbar = () => {
                 borderBottom: pathname === '/rankings' ? '2px solid var(--accent-primary)' : '2px solid transparent', paddingBottom: '2px'
               }}
             >
-              Top 10
+              Screener
             </Link>
             <Link
               href="/history" 
@@ -184,7 +184,7 @@ const Navbar = () => {
               onClick={() => setIsMenuOpen(false)}
               style={{ textDecoration: 'none', color: pathname === '/rankings' ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: pathname === '/rankings' ? 600 : 400, fontSize: '1rem', padding: '0.5rem 0' }}
             >
-              Top 10
+              Screener
             </Link>
             <Link
               href="/history" 

@@ -2,7 +2,7 @@ import { formatMarketDate } from './date';
 import { classifyTrendWithMarketGate, preScreenHistory, rankingScore } from './ranking';
 import { analyzeSymbol } from './stock-analysis-service';
 import { fetchHistoricalSummary } from './stockbit';
-import { bootstrapIdxUniverseFromCache, createAgentStory, createMatchingAlertEvents, ensureDefaultAlertRule, getActiveIdxUniverse, getAgentStoryByEmiten, saveIdxUniverse, saveSignalSnapshots, saveStockQueriesForRanking, saveStockRankings, updateAgentStory } from './supabase';
+import { bootstrapIdxUniverseFromCache, commitScreeningRun, createAgentStory, createMatchingAlertEvents, ensureDefaultAlertRule, getActiveIdxUniverse, getAgentStoryByEmiten, saveIdxUniverse, saveSignalSnapshots, saveStockQueriesForRanking, saveStockRankings, updateAgentStory } from './supabase';
 import type { StockRanking } from './types';
 import { evaluateMatureSignals } from './outcome-service';
 import { fetchIdxListedCompanies } from './idx';
@@ -11,6 +11,7 @@ import { calculateMarketRegime } from './market-regime';
 import { calculateTradingDecision } from './decision';
 import { getCalibratedProbability } from './calibration-service';
 import { ACTIVE_EXECUTION_MODEL, ACTIVE_MODEL_VERSION, ACTIVE_OUTCOME_DEFINITION, ACTIVE_REGIME_METHODOLOGY_VERSION, ACTIVE_RELATIVE_STRENGTH_METHODOLOGY_VERSION, ACTIVE_SELECTION_SCOPE, buildCalibrationContext } from './model-versions';
+import { classifyScreening, groupScreeningResults, type ScreeningResult, type SelectionStage } from './screening';
 
 const MODEL_VERSION = ACTIVE_MODEL_VERSION;
 
@@ -42,6 +43,8 @@ export interface ScreenerProgress {
 
 export async function runMarketScreener(options: { analysisDate?: string; universeLimit?: number; deepLimit?: number; aiLimit?: number; concurrency?: number } = {}) {
   const analysisDate = options.analysisDate ?? formatMarketDate();
+  const runId = crypto.randomUUID();
+  const startedAt = new Date().toISOString();
   const outcomeEvaluation = await evaluateMatureSignals(100).catch((error) => ({ pending: 0, evaluated: 0, errors: [{ symbol: '*', error: error instanceof Error ? error.message : String(error) }] }));
   let universeSource: 'idx' | 'database' | 'watchlist-cache' = 'database';
   let bootstrapped = 0;
@@ -62,11 +65,11 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
   const start = new Date(`${analysisDate}T00:00:00Z`);
   start.setUTCDate(start.getUTCDate() - 60);
   const historyStart = start.toISOString().slice(0, 10);
-  const marketHistory = (await fetchHistoricalSummary('COMPOSITE', historyStart, analysisDate, 100).catch(() => [])).filter((row) => row.date <= analysisDate);
+  const marketHistory = (await fetchHistoricalSummary('COMPOSITE', historyStart, analysisDate, 45).catch(() => [])).filter((row) => row.date <= analysisDate);
   const marketRegime = calculateMarketRegime(marketHistory);
   const preResults = await mapConcurrent(universe, options.concurrency ?? 5, async (company) => {
     const history = await fetchHistoricalSummary(company.symbol, historyStart, analysisDate, 45);
-    return { company, pre: preScreenHistory(history) };
+    return { company, pre: preScreenHistory(history), history };
   });
   const errors: Array<{ symbol: string; error: string }> = [];
   const preScreened = preResults.flatMap((result, index) => {
@@ -82,8 +85,8 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
   const candidateLimit = options.deepLimit ?? 50;
   const passedSymbols = new Set(passed.map((item) => item.company.symbol));
   const candidates = [...passed, ...preScreened.filter((item) => !passedSymbols.has(item.company.symbol))].slice(0, candidateLimit);
-  const deepResults = await mapConcurrent(candidates, Math.min(options.concurrency ?? 4, 4), async ({ company }) => {
-    const result = await analyzeSymbol(company.symbol, analysisDate, { marketHistory });
+  const deepResults = await mapConcurrent(candidates, Math.min(options.concurrency ?? 4, 4), async ({ company, history }) => {
+    const result = await analyzeSymbol(company.symbol, analysisDate, { stockHistory: history, marketHistory });
     const calibrated = await getCalibratedProbability(buildCalibrationContext({ score: result.analysis.score, marketRegime: marketRegime.label, analysisDate, methodologyVersion: result.analysis.methodologyVersion }));
     const classification = classifyTrendWithMarketGate(result.analysis, result.marketRegime, result.relativeStrength);
     result.analysis.exceptionalStrength = classification.gate.exceptionalStrengthCheck;
@@ -142,11 +145,10 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     }
     return [item.value.symbol];
   }));
-  if (!aiValidatedSymbols.size) throw new Error('Tidak ada kandidat yang berhasil divalidasi AI Story; snapshot ranking sebelumnya dipertahankan.');
   // Re-run only AI-validated candidates so the freshly persisted catalyst is
   // included in the comprehensive score and can change the final ordering.
   const rescoredResults = await mapConcurrent(aiCandidates.filter(({ result }) => aiValidatedSymbols.has(result.symbol)), Math.min(options.concurrency ?? 4, 4), async ({ result: previous }) => {
-    const result = await analyzeSymbol(previous.symbol, analysisDate, { marketHistory });
+    const result = await analyzeSymbol(previous.symbol, analysisDate, { stockHistory: previous.history, marketHistory });
     const calibrated = await getCalibratedProbability(buildCalibrationContext({ score: result.analysis.score, marketRegime: marketRegime.label, analysisDate, methodologyVersion: result.analysis.methodologyVersion }));
     const classification = classifyTrendWithMarketGate(result.analysis, result.marketRegime, result.relativeStrength);
     result.analysis.exceptionalStrength = classification.gate.exceptionalStrengthCheck;
@@ -160,7 +162,6 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     }
     return [item.value];
   }).sort((a, b) => b.sortScore - a.sortScore);
-  if (!eligible.length) throw new Error('Tidak ada kandidat AI yang berhasil dihitung ulang; snapshot sebelumnya dipertahankan.');
   const rankingRows: StockRanking[] = eligible.map(({ result, calibrated, classification }, index) => {
     const marketContext = { regime: result.marketRegime, relativeStrength: result.relativeStrength, gate: classification.gate };
     const decision = buildDecision({ result, calibrated, classification, sortScore: rankingScore(result.analysis, calibrated.probability) });
@@ -196,11 +197,55 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     decision,
   };
   });
-  const saved = await saveStockRankings(rankingRows as unknown as Array<Record<string, unknown>>);
-  await saveStockQueriesForRanking(eligible.map(({ result }) => result), analysisDate);
-  const alerts = await createMatchingAlertEvents(saved);
+  const preBySymbol = new Map(preScreened.map((item) => [item.company.symbol, item.pre]));
+  const deepBySymbol = new Map(quantitativeCandidates.map((item) => [item.result.symbol, item]));
+  const finalBySymbol = new Map(rankingRows.map((item) => [item.symbol, item]));
+  const preErrors = new Map(errors.filter((item) => !item.error.startsWith('AI Story:') && !item.error.startsWith('Rescoring:')).map((item) => [item.symbol, item.error]));
+  const aiErrors = new Map(errors.filter((item) => item.error.startsWith('AI Story:') || item.error.startsWith('Rescoring:')).map((item) => [item.symbol, item.error]));
+  const candidateSymbols = new Set(candidates.map((item) => item.company.symbol));
+  const aiSymbols = new Set(aiCandidates.map((item) => item.result.symbol));
+  const evaluatedAt = new Date().toISOString();
+  const screeningResults: ScreeningResult[] = universe.map((company) => {
+    const pre = preBySymbol.get(company.symbol);
+    const quantitative = deepBySymbol.get(company.symbol);
+    const ranking = finalBySymbol.get(company.symbol) ?? null;
+    const processError = preErrors.get(company.symbol) ?? aiErrors.get(company.symbol) ?? null;
+    const gate = quantitative?.classification.gate;
+    const completeness = quantitative?.result.analysis.dataCompleteness ?? null;
+    const confidence = quantitative?.result.analysis.quality?.confidence ?? quantitative?.result.analysis.confidence ?? null;
+    const classified = classifyScreening({
+      processingError: processError,
+      preScreenPassed: pre?.passed ?? false,
+      completeness,
+      confidence,
+      signal: quantitative?.classification.signal ?? null,
+      analysisValid: Boolean(quantitative) || Boolean(pre && !candidateSymbols.has(company.symbol)),
+      hasSevereBearishConflict: quantitative?.result.analysis.quality?.conflicts.some((item) => item.severity === 'high') ?? false,
+      hasHardRisk: quantitative?.classification.signal === 'avoid' && Boolean(quantitative.classification.riskFlags.length),
+      marketGateAvoid: gate ? gate.signalBeforeGate !== 'avoid' && gate.signalAfterGate === 'avoid' : false,
+      confirmationComplete: Boolean(ranking && aiSymbols.has(company.symbol) && quantitative?.classification.signal === 'confirmed_uptrend'),
+    });
+    const stage: SelectionStage = processError && !pre ? 'universe' : !candidateSymbols.has(company.symbol) || !quantitative ? 'pre_screen' : !aiSymbols.has(company.symbol) ? 'quantitative_analysis' : ranking ? 'final_selection' : 'quality_gate';
+    return { symbol: company.symbol, analysis_date: analysisDate, screening_status: classified.status, passed_rules: classified.rules.filter((item) => item.passed), failed_rules: classified.rules.filter((item) => !item.passed), selection_stage: stage, data_quality: { completeness, confidence, valid: !processError && Boolean(pre) }, evaluated_at: evaluatedAt, run_id: runId, ranking };
+  });
+  const passedRows = screeningResults.filter((item) => item.screening_status === 'passed' && item.ranking).map((item, index) => ({ ...item.ranking!, rank: index + 1 }));
+  const passedBySymbol = new Map(passedRows.map((row) => [row.symbol, row]));
+  for (const result of screeningResults) if (passedBySymbol.has(result.symbol)) result.ranking = passedBySymbol.get(result.symbol)!;
+  await commitScreeningRun({ id: runId, analysis_date: analysisDate, universe_count: universe.length, started_at: startedAt }, screeningResults as unknown as Array<Record<string, unknown>>);
+  // The atomic screening contract is authoritative. Legacy rankings and related
+  // side effects are best-effort compatibility writes after the run is complete.
+  const saved = await saveStockRankings(passedRows as unknown as Array<Record<string, unknown>>).catch((error) => {
+    errors.push({ symbol: '*', error: `Legacy ranking persistence: ${error instanceof Error ? error.message : String(error)}` });
+    return passedRows;
+  });
+  await saveStockQueriesForRanking(eligible.map(({ result }) => result), analysisDate).catch((error) => errors.push({ symbol: '*', error: `Stock query persistence: ${error instanceof Error ? error.message : String(error)}` }));
+  const alerts = await createMatchingAlertEvents(saved).catch((error) => {
+    errors.push({ symbol: '*', error: `Alert creation: ${error instanceof Error ? error.message : String(error)}` });
+    return [];
+  });
+  const contract = groupScreeningResults(screeningResults, universe.length);
   return {
-    date: analysisDate,
+    date: analysisDate, analysisDate, runId, ...contract,
     rankings: saved,
     alertsCreated: alerts.length,
     bootstrapped,

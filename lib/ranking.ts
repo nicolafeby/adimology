@@ -2,6 +2,7 @@ import type { AnalysisComponent, ComprehensiveAnalysis, RankingReason, TrendSign
 import type { HistoricalSummaryItem } from './stockbit';
 import { applyMarketRegimeGate } from './market-regime';
 import type { MarketRegimeAnalysis, RelativeStrengthAnalysis } from './types';
+import type { CalibratedProbability } from './probability-calibration';
 
 export const RANKING_QUALITY_THRESHOLDS = Object.freeze({ minimumCompleteness: 60, preferredCompleteness: 70, minimumConfidence: 45, confirmedConfidence: 65 });
 
@@ -100,6 +101,33 @@ export function classifyTrendWithMarketGate(analysis: ComprehensiveAnalysis, mar
   return { signal: gate.signalAfterGate, reasons: reasons.slice(0, 5), riskFlags: [...base.riskFlags, ...gate.riskFlags], gate };
 }
 
-export function rankingScore(analysis: ComprehensiveAnalysis, probability: number | null): number {
+/** @deprecated Diagnostic ordering only; never use as an eligibility or final ranking score. */
+export function diagnosticPriorityScore(analysis: ComprehensiveAnalysis, probability: number | null): number {
   return probability === null ? analysis.score : analysis.score * 0.7 + probability * 100 * 0.3;
+}
+
+export const RANKING_MODEL_CONFIG = Object.freeze({ version: 'eligible-ranking-v1', minimumProbabilitySampleSize: 50, weights: { momentum: 25, relativeStrength: 20, brokerFlow: 15, liquidity: 15, signalAgreement: 10, confidence: 10, calibratedProbability: 5 } } as const);
+export interface RankingFactor { key: string; rawValue: number | null; normalizedScore: number | null; weight: number; contribution: number; available: boolean; explanation?: string }
+export interface RankingInput { momentumScore: number | null; relativeStrength20d: number | null; brokerFlowScore: number | null; liquidityScore: number | null; signalAgreement: number | null; confidence: number | null; probability: CalibratedProbability | null }
+export interface RankingResult { score: number; factors: RankingFactor[]; availableWeight: number }
+const clamp = (value: number) => Math.max(0, Math.min(100, value));
+
+/** Pure core ranking. Missing factors are excluded and a coverage penalty prevents sparse-data advantage. */
+export function calculateRankingScore(input: RankingInput): RankingResult {
+  const probabilityValid = Boolean(input.probability && input.probability.sourceLevel !== 'insufficient_data' && input.probability.sampleSize >= RANKING_MODEL_CONFIG.minimumProbabilitySampleSize && input.probability.confidenceInterval.lower !== null && input.probability.confidenceInterval.upper !== null && input.probability.probability !== null);
+  const specs = [
+    ['momentum', input.momentumScore, RANKING_MODEL_CONFIG.weights.momentum, (v: number) => clamp(v)],
+    ['relative_strength', input.relativeStrength20d, RANKING_MODEL_CONFIG.weights.relativeStrength, (v: number) => clamp(50 + v * 5)],
+    ['broker_flow', input.brokerFlowScore, RANKING_MODEL_CONFIG.weights.brokerFlow, (v: number) => clamp(v)],
+    ['liquidity_execution', input.liquidityScore, RANKING_MODEL_CONFIG.weights.liquidity, (v: number) => clamp(v)],
+    ['signal_agreement', input.signalAgreement, RANKING_MODEL_CONFIG.weights.signalAgreement, (v: number) => clamp(v)],
+    ['confidence', input.confidence, RANKING_MODEL_CONFIG.weights.confidence, (v: number) => clamp(v)],
+    ['calibrated_probability', probabilityValid ? input.probability!.probability! * 100 : null, RANKING_MODEL_CONFIG.weights.calibratedProbability, (v: number) => clamp(v)],
+  ] as const;
+  const factors: RankingFactor[] = specs.map(([key, rawValue, weight, normalize]) => { const available = typeof rawValue === 'number' && Number.isFinite(rawValue); const normalizedScore = available ? normalize(rawValue) : null; return { key, rawValue: available ? rawValue : null, normalizedScore, weight, contribution: normalizedScore === null ? 0 : normalizedScore * weight / 100, available, explanation: key === 'calibrated_probability' && !available ? 'Dikeluarkan: calibration insufficient/incompatible; tidak diganti nol.' : undefined }; });
+  const availableWeight = factors.filter((f) => f.available).reduce((sum, f) => sum + f.weight, 0);
+  const normalized = availableWeight ? factors.reduce((sum, f) => sum + f.contribution, 0) * 100 / availableWeight : 0;
+  const coveragePenalty = availableWeight / 100;
+  const score = Math.round(clamp(normalized * coveragePenalty) * 100) / 100;
+  return { score: Number.isFinite(score) ? score : 0, factors, availableWeight };
 }

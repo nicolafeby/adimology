@@ -1160,7 +1160,19 @@ export async function saveStockRankings(rows: Array<Record<string, unknown>>) {
   // then remove stale symbols so a failed insert cannot erase the prior result.
   // market_context is embedded in the existing components JSON. Strip the
   // convenience projection so deployments do not require an added DB column.
-  const persistedRows = rows.map(({ market_context: _marketContext, decision: _decision, ...row }) => row);
+  const persistedRows = rows.map(({
+    market_context: _marketContext,
+    decision: _decision,
+    analysis_score: _analysisScore,
+    ranking_score: _rankingScore,
+    ranking_position: _rankingPosition,
+    ranking_factors: _rankingFactors,
+    eligibility_status: _eligibilityStatus,
+    eligibility_rules: _eligibilityRules,
+    eligibility_config_version: _eligibilityConfigVersion,
+    ranking_model_version: _rankingModelVersion,
+    ...row
+  }) => row);
   const { data, error } = await db
     .from('stock_rankings')
     .upsert(persistedRows, { onConflict: 'analysis_date,symbol' })
@@ -1196,15 +1208,19 @@ export async function getStockRankings(date?: string, limit = 10) {
   const uniqueRanks = new Map<number, (typeof data)[number]>();
   for (const row of data ?? []) {
     const reasons = Array.isArray(row.reasons) ? row.reasons : [];
-    const isAiV2 = reasons.some((reason: { label?: string; value?: string }) => reason.label === 'Scoring Model' && isSupportedRankingModelVersion(reason.value))
-      && reasons.some((reason: { label?: string }) => reason.label === 'AI Story');
-    if (isAiV2 && !uniqueRanks.has(Number(row.rank))) uniqueRanks.set(Number(row.rank), hydrateRankingMarketContext(row));
+    const isSupported = reasons.some((reason: { label?: string; value?: string }) => reason.label === 'Scoring Model' && isSupportedRankingModelVersion(reason.value));
+    if (isSupported && !uniqueRanks.has(Number(row.rank))) uniqueRanks.set(Number(row.rank), hydrateRankingMarketContext(row));
   }
   return [...uniqueRanks.values()].slice(0, limit);
 }
 
-export async function commitScreeningRun(run: { id: string; analysis_date: string; universe_count: number; started_at: string }, results: Array<Record<string, unknown>>) {
+export async function commitScreeningRun(run: { id: string; analysis_date: string; universe_count: number; started_at: string; quantitative_status?: 'completed' | 'partial' | 'failed'; enrichment_status?: 'not_started' | 'processing' | 'completed' | 'partial' | 'failed' }, results: Array<Record<string, unknown>>) {
   const { error } = await getSupabaseAdmin().rpc('commit_screening_run', { p_run: run, p_results: results });
+  if (error) throw error;
+}
+
+export async function updateScreeningAiEnrichment(runId: string, symbol: string, enrichment: Record<string, unknown>) {
+  const { error } = await getSupabaseAdmin().from('screening_results').update(enrichment).eq('run_id', runId).eq('symbol', symbol);
   if (error) throw error;
 }
 
@@ -1226,6 +1242,26 @@ export async function getLatestScreeningRun(date?: string) {
 
 export async function getStockRankingDetail(symbol: string, date?: string) {
   const db = getSupabaseAdmin();
+  // Current screening snapshots are authoritative. The legacy ranking table can
+  // be stale when its best-effort compatibility write fails after commit.
+  let runQuery = db.from('screening_runs').select('id, analysis_date').eq('status', 'completed');
+  if (date) runQuery = runQuery.eq('analysis_date', date);
+  const { data: screeningRun, error: runError } = await runQuery.order('analysis_date', { ascending: false }).order('completed_at', { ascending: false }).limit(1).maybeSingle();
+  if (runError && runError.code !== '42P01' && runError.code !== 'PGRST205') throw runError;
+  let authoritativeRanking: Record<string, unknown> | null = null;
+  if (screeningRun) {
+    const { data: screeningRow, error: screeningError } = await db.from('screening_results').select('*').eq('run_id', screeningRun.id).eq('symbol', symbol.toUpperCase()).eq('screening_status', 'passed').maybeSingle();
+    if (screeningError) throw screeningError;
+    if (screeningRow?.ranking) authoritativeRanking = {
+      ...(screeningRow.ranking as Record<string, unknown>),
+      analysis_score: screeningRow.analysis_score ?? (screeningRow.ranking as Record<string, unknown>).score,
+      ranking_score: screeningRow.ranking_score ?? (screeningRow.ranking as Record<string, unknown>).ranking_score,
+      ranking_position: screeningRow.ranking_position ?? (screeningRow.ranking as Record<string, unknown>).rank,
+      eligibility_status: screeningRow.eligibility_status ?? 'eligible', eligibility_rules: screeningRow.eligibility_rules ?? [],
+      ranking_factors: screeningRow.ranking_factors ?? [], eligibility_config_version: screeningRow.eligibility_config_version ?? null,
+      ranking_model_version: screeningRow.ranking_model_version ?? null,
+    };
+  }
   let rankingQuery = db.from('stock_rankings').select('*').eq('symbol', symbol.toUpperCase());
   if (date) rankingQuery = rankingQuery.eq('analysis_date', date);
   const [{ data: ranking, error: rankingError }, { data: story, error: storyError }] = await Promise.all([
@@ -1234,7 +1270,8 @@ export async function getStockRankingDetail(symbol: string, date?: string) {
   ]);
   if (rankingError) throw rankingError;
   if (storyError) throw storyError;
-  return { ranking: ranking ? hydrateRankingMarketContext(ranking) : ranking, story };
+  const selectedRanking = authoritativeRanking ?? ranking;
+  return { ranking: selectedRanking ? hydrateRankingMarketContext(selectedRanking) : selectedRanking, story };
 }
 
 export async function saveSignalSnapshots(rows: Array<Record<string, unknown>>) {

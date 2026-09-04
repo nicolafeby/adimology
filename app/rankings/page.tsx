@@ -17,7 +17,7 @@ const summarizeRunError = (message: string) => message.includes('429') || messag
 
 export default function RankingsPage() {
   const [rankings, setRankings] = useState<StockRanking[]>([]);
-  const [screeningSummary, setScreeningSummary] = useState({ universe: 0, evaluated: 0, passed: 0, watch: 0, rejected: 0, processingError: 0 });
+  const [screeningSummary, setScreeningSummary] = useState({ universe: 0, evaluated: 0, passed: 0, watch: 0, rejected: 0, processingError: 0, aiRequested: 0, aiCompleted: 0, aiFailed: 0 });
   const [otherResults, setOtherResults] = useState<{ watch: ScreeningResult[]; rejected: ScreeningResult[]; processingError: ScreeningResult[] }>({ watch: [], rejected: [], processingError: [] });
   const [date, setDate] = useState('');
   const [summary, setSummary] = useState<BacktestSummary | null>(null);
@@ -60,7 +60,7 @@ export default function RankingsPage() {
       const response = await fetch('/api/screener/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ deepLimit: 100, aiLimit: 10, concurrency: 4 }) });
       const json = await response.json();
       if (!json.success) throw new Error(json.error || 'Screener gagal dijalankan');
-      setRunMessage(`Selesai: ${json.summary.passed} passed, ${json.summary.watch} watch, ${json.summary.rejected} rejected, dan ${json.summary.processingError} processing error dari ${json.summary.universe} emiten.`);
+      setRunMessage(`Kuantitatif selesai: ${json.summary.passed} passed, ${json.summary.watch} watch, ${json.summary.rejected} rejected. AI: ${json.summary.aiCompleted}/${json.summary.aiRequested} tersedia, ${json.summary.aiFailed} gagal.`);
       setRunErrors(json.progress.errors ?? []);
       await load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Screener gagal dijalankan'); setRunMessage(''); }
@@ -88,16 +88,19 @@ export default function RankingsPage() {
       {runMessage && <div className="ranking-run-status">{runMessage}</div>}
       {runErrors.length > 0 && <details className="ranking-run-errors"><summary>Lihat rincian {runErrors.length} error</summary><div>{runErrors.map((item, index) => <p key={`${item.symbol}-${index}`}><strong>{item.symbol}</strong><span>{summarizeRunError(item.error)}</span></p>)}</div></details>}
       {!loading && <section className="screening-summary">{Object.entries({ Universe: screeningSummary.universe, Evaluated: screeningSummary.evaluated, Passed: screeningSummary.passed, Watch: screeningSummary.watch, Rejected: screeningSummary.rejected, 'Processing error': screeningSummary.processingError }).map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</section>}
+      {!loading && <p className="ranking-note">Coverage AI: {screeningSummary.aiCompleted}/{screeningSummary.aiRequested} selesai · {screeningSummary.aiFailed} gagal. Hasil kuantitatif tetap tersedia terlepas dari status AI.</p>}
       {!error && !loading && rankings.length === 0 && <div className="ranking-empty"><h2>Tidak ada saham yang memenuhi seluruh kriteria screener pada snapshot ini.</h2><p>Status watch, rejected, dan processing error dapat diperiksa di bagian audit di bawah.</p></div>}
 
       <section className="ranking-grid">
         {rankings.map((row) => (
           <article className="ranking-card" key={`${row.analysis_date}-${row.symbol}`}>
-            <div className="ranking-card-head"><span className="ranking-number">#{row.rank}</span><div><Link href={`/?symbol=${row.symbol}`}>{row.symbol}</Link><span className={`signal-pill signal-${row.signal}`}>{signalLabel[row.signal] ?? row.signal}</span>{(() => { const badge = rankingModelBadge(row.reasons.find((reason) => reason.label === 'Scoring Model')?.value); return badge && <span className="ai-validated-pill">{badge}</span>; })()}</div><strong>{row.score}<small>/100</small></strong></div>
+            <div className="ranking-card-head"><span className="ranking-number">#{row.ranking_position ?? row.rank}</span><div><Link href={`/?symbol=${row.symbol}`}>{row.symbol}</Link><span className="signal-pill signal-confirmed_uptrend">Passed</span>{(() => { const badge = rankingModelBadge(row.reasons.find((reason) => reason.label === 'Scoring Model')?.value); return badge && <span className="ai-validated-pill">{badge}</span>; })()}</div><strong>{row.ranking_score?.toFixed(1) ?? '—'}<small>/100 Ranking</small></strong></div>
+            <p className="ranking-note">Skor Analisis: {row.analysis_score ?? row.score}/100. Skor Ranking adalah prioritas relatif hanya di antara saham yang lolos eligibility.</p>
             <div className="ranking-stats"><div><span>Harga</span><strong>Rp {Number(row.last_price).toLocaleString('id-ID')}</strong></div><div title="Berapa banyak input tersedia"><span>Kelengkapan</span><strong>{row.data_completeness}%</strong></div><div title="Seberapa selaras arah sinyal"><span>Agreement</span><strong>{row.signal_agreement == null ? 'Belum tersedia' : `${row.signal_agreement}%`}</strong></div></div>
             <div className="ranking-stats"><div title="Seberapa layak analisis dipercaya"><span>Confidence</span><strong>{row.confidence == null ? 'Belum tersedia' : `${row.confidence}%`}</strong></div><div><span>Arah dominan</span><strong>{row.dominant_direction ?? 'Belum tersedia'}</strong></div><div title="Probabilitas historis conditional pada sinyal yang lolos pipeline; bukan Analysis Confidence."><span>Peluang net positif 10D</span><strong>{percent(row.model_probability)}</strong><small>{row.probability_calibration?.confidenceInterval.lower == null ? 'Kalibrasi belum cukup data' : `95%: ${percent(row.probability_calibration.confidenceInterval.lower)}–${percent(row.probability_calibration.confidenceInterval.upper)} · n=${row.probability_calibration.sampleSize}`}</small></div></div>
             {row.market_context && <div className="ranking-stats"><div><span>Market Regime</span><strong>{regimeLabel[row.market_context.regime.label]}</strong></div><div><span>RS vs IHSG 20D</span><strong>{signedPercent(row.market_context.relativeStrength.rs20d)}</strong></div><div><span>Gate</span><strong>{row.market_context.gate.applied ? `${signalLabel[row.market_context.gate.signalBeforeGate]} → ${signalLabel[row.market_context.gate.signalAfterGate]}` : 'Tidak mengubah sinyal'}</strong></div></div>}
             <div className="ranking-card-summary"><strong>Resume analisis</strong><p>{buildDetailSummary(row)}</p></div>
+            <p className="ranking-note">AI Story: {{ not_requested: 'Belum diminta', pending: 'Menunggu AI', processing: 'Sedang dianalisis', completed: 'Analisis tersedia', failed: 'Analisis gagal', stale: 'Perlu diperbarui' }[row.ai_status ?? 'not_requested']}{row.ai_error ? ` · ${summarizeRunError(row.ai_error)}` : ''}</p>
             <div className="ranking-reasons">{(row.reasons ?? []).map((reason) => <span className={reason.positive ? 'positive' : ''} key={reason.label}>{reason.label}: {reason.value}</span>)}</div>
             {(row.risk_flags ?? []).length > 0 && <p className="ranking-risk">Risiko: {row.risk_flags.join(' · ')}</p>}
             <button className="ranking-detail-btn" onClick={() => showDetail(row)}>Lihat Detail Analisis</button>
@@ -106,7 +109,7 @@ export default function RankingsPage() {
       </section>
 
       <section className="screening-audit">
-        {([['watch', 'Watch'], ['rejected', 'Rejected'], ['processingError', 'Processing error']] as const).map(([key, label]) => <details key={key}><summary>{label} ({otherResults[key].length})</summary><div className="screening-audit-list">{otherResults[key].map((row) => <article key={`${row.run_id}-${row.symbol}`}><header><strong>{row.symbol}</strong><span>{row.selection_stage.replaceAll('_', ' ')}</span></header>{row.failed_rules.map((rule) => <p key={rule.key}><b>{rule.label}:</b> {rule.explanation} <small>Aktual: {String(rule.actual_value ?? 'tidak tersedia')} · Syarat: {String(rule.required_value)}</small></p>)}</article>)}</div></details>)}
+        {([['watch', 'Watch'], ['rejected', 'Rejected'], ['processingError', 'Processing error']] as const).map(([key, label]) => <details key={key}><summary>{label} ({otherResults[key].length})</summary><div className="screening-audit-list">{otherResults[key].map((row) => <article key={`${row.run_id}-${row.symbol}`}><header><strong>{row.symbol}</strong><span>{row.selection_stage.replaceAll('_', ' ')}</span></header>{row.failed_rules.map((rule) => <p key={rule.key}><b>{rule.label}:</b> {rule.explanation} <small>Aktual: {String(rule.actualValue ?? 'tidak tersedia')} · Syarat: {String(rule.requiredValue)}</small></p>)}</article>)}</div></details>)}
       </section>
 
       <section className="ranking-lower-grid">

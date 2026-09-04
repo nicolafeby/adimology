@@ -345,6 +345,15 @@ export interface StockRanking {
   symbol: string;
   rank: number;
   score: number;
+  /** Explicit domain fields; score/rank are deprecated persistence aliases. */
+  analysis_score?: number;
+  ranking_score?: number;
+  ranking_position?: number;
+  ranking_factors?: import('./ranking').RankingFactor[];
+  eligibility_status?: import('./screening').EligibilityStatus;
+  eligibility_rules?: import('./screening').EligibilityRule[];
+  eligibility_config_version?: string;
+  ranking_model_version?: string;
   data_completeness: number;
   signal_agreement?: number | null;
   confidence?: number | null;
@@ -364,6 +373,11 @@ export interface StockRanking {
   /** Optional so rankings persisted before regime-gate-v3 remain readable. */
   market_context?: { regime: MarketRegimeAnalysis; relativeStrength: RelativeStrengthAnalysis; gate: MarketGateAudit };
   decision?: TradingDecision;
+  /** Optional enrichment metadata; never participates in screening eligibility. */
+  ai_status?: import('./screening').AiStatus;
+  ai_enrichment?: Record<string, unknown> | null;
+  ai_source?: 'cache' | 'generated' | null;
+  ai_error?: string | null;
   created_at?: string;
 }
 

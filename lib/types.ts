@@ -152,7 +152,7 @@ export interface TradingDecision {
   verdict: DecisionVerdict;
   verdictLabel: string;
   entry: { lower: number | null; upper: number | null; reference: number | null; rationale: string };
-  stop: { price: number | null; riskPercent: number | null; rationale: string };
+  stop: { price: number | null; riskPercent: number | null; rationale: string; details?: AtrStopResult | null };
   targets: { target1: number | null; target2: number | null; rewardPercent1: number | null; rewardPercent2: number | null; rationale: string };
   riskReward: { target1: number | null; target2: number | null };
   invalidations: Array<{ kind: DecisionInvalidationKind; condition: string }>;
@@ -167,7 +167,7 @@ export interface TradingDecision {
   inputs: Record<string, number | string | boolean | null>;
   thresholds: Record<string, number>;
   atrPercent: number | null;
-  positionSizing: { riskPerShare: number; riskBudget: number; maximumShares: number; maximumLots: number; positionValue: number; positionRisk: number } | null;
+  positionSizing: PositionSizingResult | null;
 }
 
 /** @deprecated Use TradingDecision. */
@@ -176,11 +176,19 @@ export type TradeDecision = TradingDecision;
 export interface PositionSizingOptions {
   /** Total trading capital available, in rupiah. */
   accountSize?: number;
+  availableCash?: number;
   /** Maximum capital at risk if the stop is hit, in percent. */
   riskPercent?: number;
+  maxAllocationPercent?: number;
+  buyFeePercent?: number;
+  sellFeePercent?: number;
+  liquidityPercentOfAdv?: number;
   /** ATR multiple used to place the stop. */
   atrMultiplier?: number;
 }
+
+export type { AtrResult, AtrStopResult, PositionSizingInput, PositionSizingResult } from './risk-management';
+import type { AtrStopResult, PositionSizingResult } from './risk-management';
 
 export type TrendSignal = 'early_uptrend' | 'confirmed_uptrend' | 'watch' | 'avoid';
 export type MarketRegimeLabel = 'bullish' | 'neutral' | 'bearish' | 'unavailable';
@@ -288,7 +296,7 @@ export interface StockAnalysisResult {
   sector?: string;
   orderbook?: OrderbookSnapshot;
   comprehensiveAnalysis?: ComprehensiveAnalysis;
-  decisionContext?: { signal?: TrendSignal; marketRegime?: MarketRegimeLabel; marketGateBlocked?: boolean; hardRiskFlags?: string[]; dataWarnings?: string[]; ara?: number | null; orderbookGeneratedAt?: string; aiStoryGeneratedAt?: string | null; historicalSnapshot?: boolean; executionPrice?: number | null; bestBid?: number | null; bestOffer?: number | null; fallbackVolatilityPercent?: number | null };
+  decisionContext?: { signal?: TrendSignal; marketRegime?: MarketRegimeLabel; marketGateBlocked?: boolean; hardRiskFlags?: string[]; dataWarnings?: string[]; ara?: number | null; orderbookGeneratedAt?: string; aiStoryGeneratedAt?: string | null; historicalSnapshot?: boolean; executionPrice?: number | null; bestBid?: number | null; bestOffer?: number | null; fallbackVolatilityPercent?: number | null; atrValue?: number | null; averageDailyVolumeShares?: number | null };
 }
 
 export interface ApiResponse {

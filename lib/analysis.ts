@@ -9,6 +9,7 @@ import type {
 import type { AiStoryScoring } from './types';
 import type { HistoricalSummaryItem } from './stockbit';
 import { calculateHistoricalFeatures, calculateMarketRegime } from './market-regime';
+import { calculateWilderAtr } from './risk-management';
 
 const clamp = (value: number, min = 0, max = 100) => Math.min(max, Math.max(min, value));
 const finite = (value: number) => Number.isFinite(value) ? value : 0;
@@ -111,9 +112,8 @@ function technicalComponent(history: HistoricalSummaryItem[]): AnalysisComponent
   const r20 = historicalFeatures.return20d;
   const window20 = rows.slice(-20);
   const sma20 = historicalFeatures.sma20 ?? window20.reduce((sum, x) => sum + x.close, 0) / window20.length;
-  const atrRows = rows.slice(-15);
-  const ranges = atrRows.slice(1).map((x, i) => Math.max(x.high - x.low, Math.abs(x.high - atrRows[i].close), Math.abs(x.low - atrRows[i].close)));
-  const atrPct = ranges.length ? (ranges.reduce((a, b) => a + b, 0) / ranges.length / latest.close) * 100 : 0;
+  const atrResult = calculateWilderAtr(rows, latest.close);
+  const atrPct = atrResult?.atrPercent ?? 0;
   const volumes = window20.map((x) => x.volume).filter((x) => x > 0);
   const averageVolume = volumes.length ? volumes.reduce((a, b) => a + b, 0) / volumes.length : 0;
   const volumeRatio = historicalFeatures.relativeVolume ?? (averageVolume > 0 ? latest.volume / averageVolume : 1);
@@ -131,7 +131,8 @@ function technicalComponent(history: HistoricalSummaryItem[]): AnalysisComponent
       metric('return5d', 'Return 5 Hari', r5 === null ? null : Math.round(r5 * 10) / 10, r5 === null ? 'unavailable' : r5 > 2 ? 'positive' : r5 < -2 ? 'negative' : 'neutral', 'Momentum harga jangka pendek.', '%'),
       metric('return20d', 'Return 20 Hari', r20 === null ? null : Math.round(r20 * 10) / 10, r20 === null ? 'unavailable' : r20 > 5 ? 'positive' : r20 < -5 ? 'negative' : 'neutral', 'Momentum harga sekitar satu bulan.', '%'),
       metric('sma20', 'Posisi vs MA20', Math.round(((latest.close / sma20) - 1) * 1000) / 10, latest.close >= sma20 ? 'positive' : 'negative', 'Jarak harga terakhir terhadap rata-rata 20 sesi.', '%'),
-      metric('atr', 'ATR 14', Math.round(atrPct * 10) / 10, atrPct <= 4 ? 'positive' : atrPct >= 7 ? 'negative' : 'neutral', 'Estimasi volatilitas harian terhadap harga.', '%'),
+      metric('atr', 'ATR 14 (Wilder)', atrResult === null ? null : Math.round(atrPct * 10) / 10, atrResult === null ? 'unavailable' : atrPct <= 4 ? 'positive' : atrPct >= 7 ? 'negative' : 'neutral', 'ATR Wilder 14 sesi terhadap harga referensi.', '%'),
+      metric('atrNominal', 'ATR Nominal', atrResult === null ? null : Math.round(atrResult.atr * 100) / 100, atrResult === null ? 'unavailable' : 'neutral', 'ATR Wilder dalam satuan harga.', 'Rp'),
       metric('volumeRatio', 'Relative Volume', Math.round(volumeRatio * 100) / 100, volumeRatio >= 1.2 ? 'positive' : volumeRatio < 0.6 ? 'negative' : 'neutral', 'Volume terakhir dibanding rata-rata 20 sesi.', 'x'),
       metric('netForeign20d', 'Net Foreign 20 Hari', Math.round(netForeign), netForeign > 0 ? 'positive' : netForeign < 0 ? 'negative' : 'neutral', 'Akumulasi net foreign pada data historis.', 'share'),
     ],

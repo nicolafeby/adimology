@@ -7,6 +7,7 @@ import type { StockInput, ApiResponse } from '@/lib/types';
 import { formatMarketDate } from '@/lib/date';
 import { calculateMarketRegime, calculateRelativeStrength } from '@/lib/market-regime';
 import { classifyTrendWithMarketGate } from '@/lib/ranking';
+import { calculateWilderAtr } from '@/lib/risk-management';
 
 export async function POST(request: NextRequest) {
   try {
@@ -199,6 +200,9 @@ export async function POST(request: NextRequest) {
     const fallbackVolatilityPercent = storedReturns.length >= 4
       ? Math.sqrt(storedReturns.reduce((sum, value) => sum + value * value, 0) / storedReturns.length)
       : null;
+    const atrResult = calculateWilderAtr(historicalData, liveExecutionPrice);
+    const volumeRows = historicalData.filter((row) => Number.isFinite(row.volume) && row.volume > 0).slice(-20);
+    const averageDailyVolumeShares = volumeRows.length ? volumeRows.reduce((sum, row) => sum + row.volume, 0) / volumeRows.length : null;
 
     // Prepare response
     const result: ApiResponse = {
@@ -240,6 +244,8 @@ export async function POST(request: NextRequest) {
           bestBid: liveBestBid,
           bestOffer: liveBestOffer,
           fallbackVolatilityPercent,
+          atrValue: atrResult?.atr ?? null,
+          averageDailyVolumeShares,
           orderbookGeneratedAt: new Date().toISOString(),
           aiStoryGeneratedAt: catalyst?.created_at ?? null,
           historicalSnapshot: false,

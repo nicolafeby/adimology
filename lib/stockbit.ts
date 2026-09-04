@@ -1,4 +1,5 @@
 import type { MarketDetectorResponse, OrderbookResponse, BrokerData, WatchlistResponse, BrokerSummaryData, EmitenInfoResponse, KeyStatsResponse, KeyStatsData, KeyStatsItem, WatchlistGroup } from './types';
+import { parseKeyStatsResponse } from './key-stats';
 import { getSessionValue, updateTokenLastUsed, invalidateToken } from './supabase';
 
 const STOCKBIT_BASE_URL = 'https://exodus.stockbit.com';
@@ -331,23 +332,6 @@ export function getBrokerSummary(marketDetectorData: MarketDetectorResponse): Br
 /**
  * Parse KeyStats API response into structured data
  */
-function parseKeyStatsResponse(json: KeyStatsResponse): KeyStatsData {
-  const categories = json.data?.closure_fin_items_results || [];
-  
-  const findCategory = (name: string): KeyStatsItem[] => {
-    const category = categories.find(c => c.keystats_name === name);
-    if (!category) return [];
-    return category.fin_name_results.map(r => r.fitem);
-  };
-
-  return {
-    currentValuation: findCategory('Current Valuation'),
-    incomeStatement: findCategory('Income Statement'),
-    balanceSheet: findCategory('Balance Sheet'),
-    profitability: findCategory('Profitability'),
-    growth: findCategory('Growth'),
-  };
-}
 
 /**
  * Fetch KeyStats data for a stock

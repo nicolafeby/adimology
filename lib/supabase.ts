@@ -47,11 +47,11 @@ export async function saveStockQuery(data: {
   total_bid?: number;
   total_offer?: number;
   total_papan?: number;
-  rata_rata_bid_ofer?: number;
+  rata_rata_bid_ofer?: number | null;
   a?: number;
-  p?: number;
-  target_realistis?: number;
-  target_max?: number;
+  p?: number | null;
+  target_realistis?: number | null;
+  target_max?: number | null;
 }) {
   const { data: result, error } = await supabase
     .from('stock_queries')
@@ -224,11 +224,11 @@ export async function saveWatchlistAnalysis(data: {
   total_bid?: number;
   total_offer?: number;
   total_papan?: number;
-  rata_rata_bid_ofer?: number;
+  rata_rata_bid_ofer?: number | null;
   a?: number;
-  p?: number;
-  target_realistis?: number;
-  target_max?: number;
+  p?: number | null;
+  target_realistis?: number | null;
+  target_max?: number | null;
   status?: string;
   error_message?: string;
 }) {
@@ -1159,7 +1159,7 @@ export async function saveStockRankings(rows: Array<Record<string, unknown>>) {
   // then remove stale symbols so a failed insert cannot erase the prior result.
   // market_context is embedded in the existing components JSON. Strip the
   // convenience projection so deployments do not require an added DB column.
-  const persistedRows = rows.map(({ market_context: _marketContext, ...row }) => row);
+  const persistedRows = rows.map(({ market_context: _marketContext, decision: _decision, ...row }) => row);
   const { data, error } = await db
     .from('stock_rankings')
     .upsert(persistedRows, { onConflict: 'analysis_date,symbol' })
@@ -1169,13 +1169,15 @@ export async function saveStockRankings(rows: Array<Record<string, unknown>>) {
   const { error: cleanupError } = await db.from('stock_rankings').delete().eq('analysis_date', analysisDate).not('symbol', 'in', `(${symbols.join(',')})`);
   if (cleanupError) throw cleanupError;
   const contextBySymbol = new Map(rows.map((row) => [String(row.symbol), row.market_context]));
-  return (data ?? []).map((row) => ({ ...row, market_context: contextBySymbol.get(String(row.symbol)) }));
+  const decisionBySymbol = new Map(rows.map((row) => [String(row.symbol), row.decision]));
+  return (data ?? []).map((row) => ({ ...row, market_context: contextBySymbol.get(String(row.symbol)), decision: decisionBySymbol.get(String(row.symbol)) }));
 }
 
 function hydrateRankingMarketContext<T extends { components?: unknown; market_context?: unknown }>(row: T): T {
   if (row.market_context || !Array.isArray(row.components)) return row;
   const component = row.components.find((item: { key?: string; marketContext?: unknown }) => item?.key === 'marketRegime' && item.marketContext);
-  return component ? { ...row, market_context: component.marketContext } : row;
+  const context = component?.marketContext as { decision?: unknown } | undefined;
+  return component ? { ...row, market_context: component.marketContext, ...(context?.decision ? { decision: context.decision } : {}) } : row;
 }
 
 export async function getStockRankings(date?: string, limit = 10) {
@@ -1193,7 +1195,7 @@ export async function getStockRankings(date?: string, limit = 10) {
   const uniqueRanks = new Map<number, (typeof data)[number]>();
   for (const row of data ?? []) {
     const reasons = Array.isArray(row.reasons) ? row.reasons : [];
-    const isAiV2 = reasons.some((reason: { label?: string; value?: string }) => reason.label === 'Scoring Model' && ['multifactor-ai-v2', 'multifactor-regime-rs-v3'].includes(reason.value ?? ''))
+    const isAiV2 = reasons.some((reason: { label?: string; value?: string }) => reason.label === 'Scoring Model' && ['multifactor-ai-v2', 'multifactor-regime-rs-v3', 'multifactor-decision-v4'].includes(reason.value ?? ''))
       && reasons.some((reason: { label?: string }) => reason.label === 'AI Story');
     if (isAiV2 && !uniqueRanks.has(Number(row.rank))) uniqueRanks.set(Number(row.rank), hydrateRankingMarketContext(row));
   }
@@ -1302,7 +1304,7 @@ export async function getRecentAlertEvents(limit = 20) {
 export async function saveStockQueriesForRanking(results: Array<{
   symbol: string; sector?: string; brokerData: { bandar: string; barangBandar: number; rataRataBandar: number };
   lastPrice: number; ara: number; arb: number; totalBid: number; totalOffer: number;
-  targets: { fraksi: number; totalPapan: number; rataRataBidOfer: number; a: number; p: number; targetRealistis1: number; targetMax: number };
+  targets: { fraksi: number; totalPapan: number; rataRataBidOfer: number | null; a: number; p: number | null; targetRealistis1: number | null; targetMax: number | null };
 }>, date: string) {
   if (!results.length) return [];
   const rows = results.map((result) => ({

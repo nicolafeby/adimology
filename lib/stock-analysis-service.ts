@@ -8,7 +8,9 @@ import type { HistoricalSummaryItem } from './stockbit';
 export async function analyzeSymbol(symbol: string, analysisDate: string, benchmarks: { marketHistory?: HistoricalSummaryItem[]; sectorHistory?: HistoricalSummaryItem[] } = {}) {
   const emiten = symbol.trim().toUpperCase();
   const start = new Date(`${analysisDate}T00:00:00Z`);
-  start.setUTCDate(start.getUTCDate() - 140);
+  // Keep the range within the historical-summary API's accepted window while
+  // retaining enough observations for MA20/ATR and relative-strength inputs.
+  start.setUTCDate(start.getUTCDate() - 60);
   const historyStart = start.toISOString().slice(0, 10);
   const detectorStartDate = new Date(`${analysisDate}T00:00:00Z`);
   detectorStartDate.setUTCDate(detectorStartDate.getUTCDate() - 28);

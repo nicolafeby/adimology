@@ -145,7 +145,7 @@ const parseValue = (raw: string) => {
 };
 
 function findStat(data: KeyStatsData, patterns: RegExp[]) {
-  const items = Object.values(data).flat();
+  const items = Object.values(data).filter((value): value is KeyStatsData[keyof Omit<KeyStatsData, 'warning'>] => Array.isArray(value)).flat();
   const found = items.find((item) => patterns.some((pattern) => pattern.test(item.name.toLowerCase())));
   return found ? { name: found.name, value: parseValue(found.value), raw: found.value } : null;
 }

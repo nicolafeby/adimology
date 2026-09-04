@@ -11,7 +11,7 @@ interface OrderbookCardProps {
   orderbook?: OrderbookSnapshot;
 }
 
-const formatNumber = (value: number) => value.toLocaleString('id-ID');
+const formatNumber = (value: number | null) => value === null ? '—' : value.toLocaleString('id-ID');
 const POLL_INTERVAL_MS = 3_000;
 
 export default function OrderbookCard({ emiten, analysisDate, marketData, calculated, orderbook }: OrderbookCardProps) {
@@ -157,7 +157,7 @@ function HistoricalOrderbookInsight({
         ? { label: 'Offer dominan', tone: 'negative', description: 'Likuiditas jual lebih besar; harga menghadapi tekanan supply.' }
         : { label: 'Relatif seimbang', tone: 'neutral', description: 'Bid dan offer berada pada rentang yang relatif berimbang.' };
 
-  const safeNumber = (value: number) => Number.isFinite(value) ? formatNumber(value) : '—';
+  const safeNumber = (value: number | null) => value !== null && Number.isFinite(value) ? formatNumber(value) : '—';
   const formattedDate = new Date(`${analysisDate}T00:00:00`).toLocaleDateString('id-ID', {
     day: 'numeric',
     month: 'long',

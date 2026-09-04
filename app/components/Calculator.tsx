@@ -38,13 +38,15 @@ function withStaleStoryError(stories: AgentStoryResult[]) {
 
 // Helper function to format the result data for copying
 function formatResultForCopy(result: StockAnalysisResult): string {
-  const { input, stockbitData, marketData, calculated } = result;
+  const { input, stockbitData, calculated } = result;
+  const marketData = result.executionMarketData ?? result.marketData;
 
   const formatNumber = (num: number | null | undefined) => num?.toLocaleString() ?? '-';
 
-  const calculateGain = (target: number) => {
+  const calculateGain = (target: number | null) => {
+    if (target === null || marketData.harga <= 0) return 'Data tidak tersedia';
     const gain = ((target - marketData.harga) / marketData.harga) * 100;
-    return `${gain >= 0 ? '+' : ''}${gain.toFixed(2)}`;
+    return `${gain >= 0 ? '+' : ''}${gain.toFixed(2)}%`;
   };
 
   const lines = [
@@ -56,7 +58,7 @@ function formatResultForCopy(result: StockAnalysisResult): string {
     `∑ Brg: ${formatNumber(stockbitData.barangBandar)} lot`,
     `Avg Harga: Rp ${formatNumber(stockbitData.rataRataBandar)}`,
     ``,
-    `MARKET DATA`,
+    `MARKET DATA${result.executionMarketData ? ' (LIVE)' : ''}`,
     `Harga: Rp ${formatNumber(marketData.harga)}`,
     `Offer Max: Rp ${formatNumber(marketData.offerTeratas)}`,
     `Bid Min: Rp ${formatNumber(marketData.bidTerbawah)}`,
@@ -70,8 +72,8 @@ function formatResultForCopy(result: StockAnalysisResult): string {
     `a (5% avg bandar): ${formatNumber(calculated.a)}`,
     `p (Brg/Avg Bid-Offer): ${formatNumber(calculated.p)}`,
     ``,
-    `Target 1: ${calculated.targetRealistis1} (${calculateGain(calculated.targetRealistis1)}%)`,
-    `Target 2: ${calculated.targetMax} (${calculateGain(calculated.targetMax)}%)`,
+    `Target 1: ${formatNumber(calculated.targetRealistis1)} (${calculateGain(calculated.targetRealistis1)})`,
+    `Target 2: ${formatNumber(calculated.targetMax)} (${calculateGain(calculated.targetMax)})`,
   ];
 
   return lines.join('\n');
@@ -508,9 +510,9 @@ export default function Calculator({ selectedStock }: CalculatorProps) {
                 <OrderbookCard
                   emiten={result.input.emiten}
                   analysisDate={result.input.toDate}
-                  marketData={result.marketData}
+                  marketData={result.executionMarketData ?? result.marketData}
                   calculated={result.calculated}
-                  orderbook={result.orderbook}
+                  orderbook={result.executionOrderbook ?? result.orderbook}
                 />
               </div>
             </div>

@@ -5,6 +5,8 @@ import { buildComprehensiveAnalysis } from '@/lib/analysis';
 import { saveStockQuery, updatePendingRealPrices, getLatestStockQuery, getSpecificStockQuery, getStockPriceByDate, getRecentStockQueries, getLatestCompletedAgentStory } from '@/lib/supabase';
 import type { StockInput, ApiResponse } from '@/lib/types';
 import { formatMarketDate } from '@/lib/date';
+import { calculateMarketRegime, calculateRelativeStrength } from '@/lib/market-regime';
+import { classifyTrendWithMarketGate } from '@/lib/ranking';
 
 export async function POST(request: NextRequest) {
   try {
@@ -25,12 +27,18 @@ export async function POST(request: NextRequest) {
 
     // 2. Fetch data from both Stockbit APIs and emiten info
     const historyStart = new Date(`${toDate}T00:00:00Z`);
-    historyStart.setUTCDate(historyStart.getUTCDate() - 140);
+    // Stockbit's historical-summary endpoint rejects overly wide ranges on some
+    // accounts. Sixty calendar days still provides at least 20 IDX sessions.
+    historyStart.setUTCDate(historyStart.getUTCDate() - 60);
+    let historicalDataError: string | null = null;
     const [marketDetectorData, orderbookData, emitenInfoData, historicalData, keyStatsData, benchmarkHistory, brokerHistory, catalyst] = await Promise.all([
       fetchMarketDetector(emiten, fromDate, toDate),
       fetchOrderbook(emiten),
       fetchEmitenInfo(emiten).catch(() => null),
-      fetchHistoricalSummary(emiten, historyStart.toISOString().slice(0, 10), toDate, 100).catch(() => []),
+      fetchHistoricalSummary(emiten, historyStart.toISOString().slice(0, 10), toDate, 100).catch((error) => {
+        historicalDataError = error instanceof Error ? error.message : 'Feed historis gagal dimuat';
+        return [];
+      }),
       fetchKeyStats(emiten).catch(() => undefined),
       fetchHistoricalSummary('COMPOSITE', historyStart.toISOString().slice(0, 10), toDate, 100).catch(() => []),
       getRecentStockQueries(emiten).catch(() => []),
@@ -110,6 +118,9 @@ export async function POST(request: NextRequest) {
 
     const offerPrices = (obData.offer || []).map((o: { price: string }) => Number(o.price));
     const bidPrices = (obData.bid || []).map((b: { price: string }) => Number(b.price));
+    const liveBestOffer = offerPrices.filter((price) => Number.isFinite(price) && price > 0).sort((a, b) => a - b)[0] ?? null;
+    const liveBestBid = bidPrices.filter((price) => Number.isFinite(price) && price > 0).sort((a, b) => b - a)[0] ?? null;
+    const liveExecutionPrice = Number(obData.close);
 
     const officialAra = Number(obData.ara?.value ?? obData.ara);
     const officialArb = Number(obData.arb?.value ?? obData.arb);
@@ -119,6 +130,7 @@ export async function POST(request: NextRequest) {
     marketData.bidTerbawah = officialArb > 0 && officialArb < marketData.harga
       ? officialArb
       : bidPrices.length > 0 ? Math.min(...bidPrices) : 0;
+    const liveMarketData = { ...marketData };
 
     const toOrderbookLevel = (level: {
       price: string;
@@ -133,12 +145,11 @@ export async function POST(request: NextRequest) {
     });
 
     // Orderbook is a live snapshot, so do not attach it to historical analysis.
-    const orderbook = isToday
-      ? {
-          bid: (obData.bid || []).slice(0, 10).map(toOrderbookLevel),
-          offer: (obData.offer || []).slice(0, 10).map(toOrderbookLevel),
-        }
-      : undefined;
+    const liveOrderbook = {
+      bid: (obData.bid || []).slice(0, 10).map(toOrderbookLevel),
+      offer: (obData.offer || []).slice(0, 10).map(toOrderbookLevel),
+    };
+    const orderbook = isToday ? liveOrderbook : undefined;
 
     // 3. For any non-today queries (past single dates or ranges), Override Price from Database (if available)
     if (!isToday) {
@@ -158,11 +169,11 @@ export async function POST(request: NextRequest) {
     const calculated = calculateTargets(
       brokerData.rataRataBandar,
       brokerData.barangBandar,
-      marketData.offerTeratas,
-      marketData.bidTerbawah,
-      marketData.totalBid / 100,
-      marketData.totalOffer / 100,
-      marketData.harga
+      liveMarketData.offerTeratas,
+      liveMarketData.bidTerbawah,
+      liveMarketData.totalBid / 100,
+      liveMarketData.totalOffer / 100,
+      liveMarketData.harga
     );
 
     // Additional analysis is deliberately additive. Existing target calculations
@@ -177,6 +188,17 @@ export async function POST(request: NextRequest) {
       brokerHistory,
       catalyst,
     });
+    const marketRegime = calculateMarketRegime(benchmarkHistory);
+    const relativeStrength = calculateRelativeStrength(historicalData, benchmarkHistory);
+    const classification = classifyTrendWithMarketGate(comprehensiveAnalysis, marketRegime, relativeStrength);
+    const storedPrices = brokerHistory
+      .map((row) => ({ date: String(row.from_date), price: Number(row.harga) }))
+      .filter((row) => Number.isFinite(row.price) && row.price > 0)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const storedReturns = storedPrices.slice(1).map((row, index) => (row.price / storedPrices[index].price - 1) * 100);
+    const fallbackVolatilityPercent = storedReturns.length >= 4
+      ? Math.sqrt(storedReturns.reduce((sum, value) => sum + value * value, 0) / storedReturns.length)
+      : null;
 
     // Prepare response
     const result: ApiResponse = {
@@ -188,6 +210,9 @@ export async function POST(request: NextRequest) {
           ...marketData,
           fraksi: calculated.fraksi,
         },
+        executionMarketData: { ...liveMarketData, fraksi: calculated.fraksi },
+        executionOrderbook: liveOrderbook,
+        executionUpdatedAt: new Date().toISOString(),
         calculated: {
           totalPapan: calculated.totalPapan,
           rataRataBidOfer: calculated.rataRataBidOfer,
@@ -200,6 +225,25 @@ export async function POST(request: NextRequest) {
         sector,
         orderbook,
         comprehensiveAnalysis,
+        decisionContext: {
+          signal: classification.signal,
+          marketRegime: marketRegime.label,
+          marketGateBlocked: classification.gate.signalBeforeGate !== 'avoid' && classification.gate.signalAfterGate === 'avoid',
+          hardRiskFlags: classification.signal === 'avoid' ? classification.riskFlags : [],
+          dataWarnings: [
+            ...(historicalDataError ? [`Data historis gagal dimuat: ${historicalDataError}`] : []),
+            ...(!historicalDataError && historicalData.length < 5 ? [`Data historis hanya ${historicalData.length} sesi; minimal 5 sesi diperlukan untuk ATR.`] : []),
+            ...(!isToday ? ['Analisis broker memakai tanggal pilihan; level eksekusi memakai orderbook live terbaru.'] : []),
+          ],
+          ara: officialAra > liveExecutionPrice ? officialAra : null,
+          executionPrice: liveExecutionPrice,
+          bestBid: liveBestBid,
+          bestOffer: liveBestOffer,
+          fallbackVolatilityPercent,
+          orderbookGeneratedAt: new Date().toISOString(),
+          aiStoryGeneratedAt: catalyst?.created_at ?? null,
+          historicalSnapshot: false,
+        },
       },
     };
 

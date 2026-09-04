@@ -9,6 +9,7 @@ import { fetchIdxListedCompanies } from './idx';
 import { generateAiStory } from './ai-story-service';
 import { calculateMarketRegime } from './market-regime';
 import { RANKING_MODEL_VERSION } from './model-version';
+import { calculateTradingDecision } from './decision';
 
 const MODEL_VERSION = RANKING_MODEL_VERSION;
 
@@ -142,6 +143,11 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
   if (!eligible.length) throw new Error('Tidak ada kandidat AI yang berhasil dihitung ulang; snapshot sebelumnya dipertahankan.');
   const rankingRows: StockRanking[] = eligible.map(({ result, calibrated, classification }, index) => {
     const marketContext = { regime: result.marketRegime, relativeStrength: result.relativeStrength, gate: classification.gate };
+    const metricNumber = (key: string) => { const value = result.analysis.components.flatMap((component) => component.metrics).find((item) => item.key === key)?.value; return typeof value === 'number' && Number.isFinite(value) ? value : null; };
+    const componentScore = (key: string) => result.analysis.components.find((component) => component.key === key)?.score ?? null;
+    const bestBid = result.orderbook.bid.reduce<number | null>((best, level) => level.price > 0 && (best === null || level.price > best) ? level.price : best, null);
+    const bestOffer = result.orderbook.offer.reduce<number | null>((best, level) => level.price > 0 && (best === null || level.price < best) ? level.price : best, null);
+    const decision = calculateTradingDecision({ currentPrice: result.lastPrice, bestBid, bestOffer, targetRealistic: result.targets.targetRealistis1, targetMaximum: result.targets.targetMax, ara: result.ara, atrPercent: metricNumber('atr'), priceVsSma20Percent: metricNumber('sma20'), relativeVolume: metricNumber('volumeRatio'), liquidityScore: componentScore('liquidity'), brokerFlowScore: componentScore('brokerFlow'), signal: classification.signal, marketRegime: result.marketRegime.label, marketGateBlocked: classification.gate.signalBeforeGate !== 'avoid' && classification.gate.signalAfterGate === 'avoid', hardRiskFlags: classification.signal === 'avoid' ? classification.riskFlags : [], confidence: classification.gate.confidenceAfter ?? result.analysis.confidence, dataCompleteness: result.analysis.dataCompleteness, generatedAt: result.analysis.generatedAt, orderbookGeneratedAt: result.analysis.generatedAt, aiStoryGeneratedAt: result.catalyst?.created_at ?? null });
     return {
     analysis_date: analysisDate,
     symbol: result.symbol,
@@ -160,21 +166,23 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
       ...classification.reasons,
     ],
     risk_flags: classification.riskFlags,
-    components: result.analysis.components.map((component) => component.key === 'marketRegime' ? { ...component, marketContext } : component),
+    components: result.analysis.components.map((component) => component.key === 'marketRegime' ? { ...component, marketContext: { ...marketContext, decision } } : component),
     market_context: marketContext,
+    decision,
   };
   });
   const saved = await saveStockRankings(rankingRows as unknown as Array<Record<string, unknown>>);
+  const decisionBySymbol = new Map(rankingRows.map((row) => [row.symbol, row.decision]));
   await saveSignalSnapshots(eligible.map(({ result, calibrated, classification }) => ({
     signal_date: analysisDate,
     symbol: result.symbol,
     score: result.analysis.score,
     data_completeness: result.analysis.dataCompleteness,
     signal: classification.signal,
-    entry_price: result.lastPrice,
-    target_price: result.targets.targetRealistis1,
-    stop_price: Math.max(0, result.lastPrice - result.targets.fraksi * 5),
-    feature_snapshot: { components: result.analysis.components, market_regime: marketRegime.label, market_regime_analysis: result.marketRegime, relative_strength: result.relativeStrength, gate: classification.gate, raw_features: { stock_history: result.history, market_history: marketHistory }, model_probability: calibrated?.probability ?? null, probability_sample_size: calibrated?.sampleSize ?? 0 },
+    entry_price: decisionBySymbol.get(result.symbol)?.entry.reference ?? result.lastPrice,
+    target_price: decisionBySymbol.get(result.symbol)?.targets.target1 ?? null,
+    stop_price: decisionBySymbol.get(result.symbol)?.stop.price ?? null,
+    feature_snapshot: { components: result.analysis.components, market_regime: marketRegime.label, market_regime_analysis: result.marketRegime, relative_strength: result.relativeStrength, gate: classification.gate, decision: decisionBySymbol.get(result.symbol) ?? null, raw_features: { stock_history: result.history, market_history: marketHistory }, model_probability: calibrated?.probability ?? null, probability_sample_size: calibrated?.sampleSize ?? 0 },
     model_version: MODEL_VERSION,
   })));
   await saveStockQueriesForRanking(eligible.map(({ result }) => result), analysisDate);

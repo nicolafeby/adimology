@@ -145,36 +145,39 @@ export interface ComprehensiveAnalysis {
   warnings: string[];
 }
 
-export type DecisionVerdict = 'ACTIONABLE' | 'WAIT' | 'AVOID';
+export type DecisionVerdict = 'buy_now' | 'wait_for_pullback' | 'watch' | 'avoid' | 'insufficient_data';
+export type DecisionInvalidationKind = 'price' | 'signal' | 'time';
 
-export interface TradeDecision {
+export interface TradingDecision {
   verdict: DecisionVerdict;
   verdictLabel: string;
-  rationale: string;
-  entryLow: number;
-  entryHigh: number;
-  stop: number;
-  target: number;
-  riskReward: number | null;
+  entry: { lower: number | null; upper: number | null; reference: number | null; rationale: string };
+  stop: { price: number | null; riskPercent: number | null; rationale: string };
+  targets: { target1: number | null; target2: number | null; rewardPercent1: number | null; rewardPercent2: number | null; rationale: string };
+  riskReward: { target1: number | null; target2: number | null };
+  invalidations: Array<{ kind: DecisionInvalidationKind; condition: string }>;
+  validUntil: { tradingSessions: number; date: string | null };
+  confidence: number;
+  dataCompleteness: number;
+  reasons: string[];
+  warnings: string[];
+  generatedAt: string;
+  modelVersion: string;
+  freshness: { dataAgeMinutes: number | null; orderbookFresh: boolean; aiStoryFresh: boolean | null; refreshRequired: boolean; executionDataStatus: 'fresh' | 'stale' | 'historical_unavailable' };
+  inputs: Record<string, number | string | boolean | null>;
+  thresholds: Record<string, number>;
   atrPercent: number | null;
-  atrMultiplier: number;
-  stopDistancePercent: number;
-  riskPerShare: number;
-  accountSize: number;
-  riskPercent: number;
-  riskBudget: number;
-  positionShares: number;
-  positionLots: number;
-  positionValue: number;
-  positionRisk: number;
-  invalidation: string;
+  positionSizing: { riskPerShare: number; riskBudget: number; maximumShares: number; maximumLots: number; positionValue: number; positionRisk: number } | null;
 }
+
+/** @deprecated Use TradingDecision. */
+export type TradeDecision = TradingDecision;
 
 export interface PositionSizingOptions {
   /** Total trading capital available, in rupiah. */
-  accountSize: number;
+  accountSize?: number;
   /** Maximum capital at risk if the stop is hit, in percent. */
-  riskPercent: number;
+  riskPercent?: number;
   /** ATR multiple used to place the stop. */
   atrMultiplier?: number;
 }
@@ -238,6 +241,7 @@ export interface StockRanking {
   components: AnalysisComponent[];
   /** Optional so rankings persisted before regime-gate-v3 remain readable. */
   market_context?: { regime: MarketRegimeAnalysis; relativeStrength: RelativeStrengthAnalysis; gate: MarketGateAudit };
+  decision?: TradingDecision;
   created_at?: string;
 }
 
@@ -262,17 +266,21 @@ export interface BacktestSummary {
 
 export interface CalculatedData {
   totalPapan: number;
-  rataRataBidOfer: number;
+  rataRataBidOfer: number | null;
   a: number;
-  p: number;
-  targetRealistis1: number;
-  targetMax: number;
+  p: number | null;
+  targetRealistis1: number | null;
+  targetMax: number | null;
 }
 
 export interface StockAnalysisResult {
   input: StockInput;
   stockbitData: BrokerData;
   marketData: MarketData;
+  /** Latest execution snapshot, intentionally separate from the selected analysis date. */
+  executionMarketData?: MarketData;
+  executionOrderbook?: OrderbookSnapshot;
+  executionUpdatedAt?: string;
   calculated: CalculatedData;
   brokerSummary?: BrokerSummaryData;
   isFromHistory?: boolean;
@@ -280,6 +288,7 @@ export interface StockAnalysisResult {
   sector?: string;
   orderbook?: OrderbookSnapshot;
   comprehensiveAnalysis?: ComprehensiveAnalysis;
+  decisionContext?: { signal?: TrendSignal; marketRegime?: MarketRegimeLabel; marketGateBlocked?: boolean; hardRiskFlags?: string[]; dataWarnings?: string[]; ara?: number | null; orderbookGeneratedAt?: string; aiStoryGeneratedAt?: string | null; historicalSnapshot?: boolean; executionPrice?: number | null; bestBid?: number | null; bestOffer?: number | null; fallbackVolatilityPercent?: number | null };
 }
 
 export interface ApiResponse {
@@ -383,6 +392,7 @@ export interface KeyStatsData {
   balanceSheet: KeyStatsItem[];
   profitability: KeyStatsItem[];
   growth: KeyStatsItem[];
+  warning?: string;
 }
 
 // Agent Story Types

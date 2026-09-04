@@ -36,28 +36,29 @@ export function calculateTargets(
   const totalPapan = Number.isFinite(rawTotalPapan) && rawTotalPapan > 0 ? rawTotalPapan : 1;
 
   // Rata rata Bid Ofer = (Total Bid + Total Offer) / Total Papan
-  const rawAverage = (Math.max(0, totalBid) + Math.max(0, totalOffer)) / totalPapan;
-  const rataRataBidOfer = Number.isFinite(rawAverage) && rawAverage > 0 ? rawAverage : 1;
+  const depth = Math.max(0, totalBid) + Math.max(0, totalOffer);
+  const rawAverage = depth > 0 ? depth / totalPapan : null;
+  const rataRataBidOfer = rawAverage !== null && Number.isFinite(rawAverage) && rawAverage > 0 ? rawAverage : null;
 
   // a = Rata rata bandar × 5%
   const a = rataRataBandar * 0.05;
 
   // p = Barang Bandar / Rata rata Bid Ofer
-  const p = Number.isFinite(barangBandar) && barangBandar > 0 ? barangBandar / rataRataBidOfer : 0;
+  const p = rataRataBidOfer !== null && Number.isFinite(barangBandar) && barangBandar >= 0 ? barangBandar / rataRataBidOfer : null;
 
   // Target Realistis = Rata rata bandar + a + (p/2 × Fraksi)
-  const targetRealistis1 = rataRataBandar + a + ((p / 2) * fraksi);
+  const targetRealistis1 = p === null ? null : rataRataBandar + a + ((p / 2) * fraksi);
 
   // Target Max = Rata rata bandar + a + (p × Fraksi)
-  const targetMax = rataRataBandar + a + (p * fraksi);
+  const targetMax = p === null ? null : rataRataBandar + a + (p * fraksi);
 
   return {
     fraksi,
     totalPapan: Math.round(totalPapan),
-    rataRataBidOfer: Math.round(rataRataBidOfer),
+    rataRataBidOfer: rataRataBidOfer === null ? null : Math.round(rataRataBidOfer),
     a: Math.round(a),
-    p: Math.round(p),
-    targetRealistis1: Math.round(targetRealistis1),
-    targetMax: Math.round(targetMax),
+    p: p === null ? null : Math.round(p),
+    targetRealistis1: targetRealistis1 === null ? null : Math.round(targetRealistis1),
+    targetMax: targetMax === null ? null : Math.round(targetMax),
   };
 }

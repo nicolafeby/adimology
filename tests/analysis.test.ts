@@ -4,6 +4,7 @@ import { calculateTargets, getFraksi } from '../lib/calculations';
 import { buildComprehensiveAnalysis } from '../lib/analysis';
 import { preScreenHistory, classifyTrend } from '../lib/ranking';
 import { netReturnPercent, summarizeBacktest } from '../lib/backtest';
+import { parseKeyStatsResponse } from '../lib/key-stats';
 
 test('legacy target calculation remains stable for valid inputs', () => {
   const result = calculateTargets(1000, 5000, 1200, 800, 10000, 10000, 1000);
@@ -70,9 +71,27 @@ test('catalyst component uses structured AI score without keyword heuristics', (
   assert.equal(catalyst?.metrics.find((metric) => metric.key === 'aiStoryConfidence')?.value, 82);
 });
 
-test('target calculation never emits NaN or Infinity for incomplete orderbook', () => {
+test('target calculation returns null instead of fabricated values for incomplete orderbook', () => {
   const result = calculateTargets(1000, 0, 0, 0, 0, 0, 1000);
-  for (const value of Object.values(result)) assert.equal(Number.isFinite(value), true);
+  assert.equal(result.rataRataBidOfer, null);
+  assert.equal(result.p, null);
+  assert.equal(result.targetRealistis1, null);
+  assert.equal(result.targetMax, null);
+});
+
+test('key stats parser accepts category aliases and nested item variants', () => {
+  const result = parseKeyStatsResponse({ data: { fin_items_results: [
+    { name: 'Valuation Ratios', items: [{ item: { id: 1, label: 'PE', display_value: '14.2' } }] },
+    { category: 'Profitability Ratios', data: [{ fitem: { id: 2, name: 'Return on Equity', value: '18%' } }] },
+  ] } });
+  assert.equal(result.currentValuation[0]?.name, 'PE');
+  assert.equal(result.profitability[0]?.value, '18%');
+  assert.equal(result.warning, undefined);
+});
+
+test('empty key stats response is explicit instead of a silent blank card', () => {
+  const result = parseKeyStatsResponse({ data: {} });
+  assert.match(result.warning ?? '', /tidak tersedia/i);
 });
 
 test('IDX price fractions retain existing boundaries', () => {

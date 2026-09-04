@@ -8,6 +8,7 @@ interface KeyStatsCardProps {
 }
 
 export default function KeyStatsCard({ emiten, keyStats }: KeyStatsCardProps) {
+  const itemCount = keyStats.currentValuation.length + keyStats.incomeStatement.length + keyStats.balanceSheet.length + keyStats.profitability.length + keyStats.growth.length;
   // Helper to render a stats section
   const renderSection = (title: string, items: KeyStatsItem[], maxItems: number = 5) => {
     if (!items || items.length === 0) return null;
@@ -58,6 +59,7 @@ export default function KeyStatsCard({ emiten, keyStats }: KeyStatsCardProps) {
       </div>
 
       {/* Sections */}
+      {itemCount === 0 && <div className="keystats-empty"><strong>Data belum tersedia</strong><p>{keyStats.warning ?? 'Stockbit tidak mengembalikan Key Stats untuk emiten ini.'}</p></div>}
       {renderSection('Current Valuation', keyStats.currentValuation, 6)}
       {renderSection('Income Statement', keyStats.incomeStatement, 4)}
       {renderSection('Balance Sheet', keyStats.balanceSheet, 5)}

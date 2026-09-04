@@ -17,11 +17,13 @@ export default function CompactResultCard({
   copiedText, 
   copiedImage 
 }: CompactResultCardProps) {
-  const { input, stockbitData, marketData, calculated } = result;
+  const { input, stockbitData, calculated } = result;
+  const marketData = result.executionMarketData ?? result.marketData;
 
   const formatNumber = (num: number | null | undefined) => num?.toLocaleString() ?? '-';
   
-  const calculateGain = (target: number) => {
+  const calculateGain = (target: number | null) => {
+    if (target === null || marketData.harga <= 0) return null;
     const gain = ((target - marketData.harga) / marketData.harga) * 100;
     return `${gain >= 0 ? '+' : ''}${gain.toFixed(2)}`;
   };
@@ -100,7 +102,7 @@ export default function CompactResultCard({
 
         {/* Market Data Section */}
         <div className="compact-section">
-          <div className="compact-section-title">Market Data</div>
+          <div className="compact-section-title">Market Data{result.executionMarketData ? ' · Live' : ''}</div>
           <div className="compact-grid-3">
             <div className="compact-cell">
               <span className="compact-label">Harga</span>
@@ -163,15 +165,15 @@ export default function CompactResultCard({
             <div className="compact-cell compact-target-cell">
               <span className="compact-label">Target Realistis</span>
               <div className="compact-target">
-                <span className="compact-target-value compact-badge-success">{calculated.targetRealistis1}</span>
-                <span className="compact-target-gain">{calculateGain(calculated.targetRealistis1)}%</span>
+                <span className="compact-target-value compact-badge-success">{formatNumber(calculated.targetRealistis1)}</span>
+                <span className="compact-target-gain">{calculateGain(calculated.targetRealistis1) ?? 'Depth pasar tidak tersedia'}{calculated.targetRealistis1 === null ? '' : '%'}</span>
               </div>
             </div>
             <div className="compact-cell compact-target-cell">
               <span className="compact-label">Target Max</span>
               <div className="compact-target">
-                <span className="compact-target-value compact-badge-warning">{calculated.targetMax}</span>
-                <span className="compact-target-gain">{calculateGain(calculated.targetMax)}%</span>
+                <span className="compact-target-value compact-badge-warning">{formatNumber(calculated.targetMax)}</span>
+                <span className="compact-target-gain">{calculateGain(calculated.targetMax) ?? 'Depth pasar tidak tersedia'}{calculated.targetMax === null ? '' : '%'}</span>
               </div>
             </div>
           </div>

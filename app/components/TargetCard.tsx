@@ -4,12 +4,13 @@ interface TargetCardProps {
   emiten: string;
   sector?: string;
   currentPrice: number;
-  targetRealistis: number;
-  targetMax: number;
+  targetRealistis: number | null;
+  targetMax: number | null;
 }
 
 export default function TargetCard({ emiten, sector, currentPrice, targetRealistis, targetMax }: TargetCardProps) {
-  const calculateGain = (target: number) => {
+  const calculateGain = (target: number | null) => {
+    if (target === null || currentPrice <= 0) return null;
     const gain = ((target - currentPrice) / currentPrice) * 100;
     return `${gain >= 0 ? '+' : ''}${gain.toFixed(2)}`;
   };
@@ -51,13 +52,13 @@ export default function TargetCard({ emiten, sector, currentPrice, targetRealist
             fontWeight: '700',
             marginBottom: '0.5rem'
           }}>
-            {targetRealistis}
+            {targetRealistis?.toLocaleString('id-ID') ?? '—'}
           </div>
           <div style={{ 
             fontSize: '1rem',
             opacity: 0.9
           }}>
-            {calculateGain(targetRealistis)}% gain
+            {calculateGain(targetRealistis) === null ? 'Depth pasar tidak tersedia' : `${calculateGain(targetRealistis)}% gain`}
           </div>
         </div>
 
@@ -83,13 +84,13 @@ export default function TargetCard({ emiten, sector, currentPrice, targetRealist
             fontWeight: '700',
             marginBottom: '0.5rem'
           }}>
-            {targetMax}
+            {targetMax?.toLocaleString('id-ID') ?? '—'}
           </div>
           <div style={{ 
             fontSize: '1rem',
             opacity: 0.9
           }}>
-            {calculateGain(targetMax)}% gain
+            {calculateGain(targetMax) === null ? 'Depth pasar tidak tersedia' : `${calculateGain(targetMax)}% gain`}
           </div>
         </div>
       </div>

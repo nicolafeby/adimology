@@ -1,53 +1,22 @@
-import assert from 'node:assert/strict';
-import test from 'node:test';
-import { buildTradeDecision } from '../lib/decision';
-import type { StockAnalysisResult } from '../lib/types';
-
-const result = (score: number, completeness = 80, target = 1150): StockAnalysisResult => ({
-  input: { emiten: 'TEST', fromDate: '2026-01-01', toDate: '2026-01-31' },
-  stockbitData: { bandar: 'XX', barangBandar: 1000, rataRataBandar: 1000 },
-  marketData: { harga: 1000, offerTeratas: 1005, bidTerbawah: 995, fraksi: 5, totalBid: 100, totalOffer: 100 },
-  calculated: { totalPapan: 10, rataRataBidOfer: 10, a: 50, p: 10, targetRealistis1: target, targetMax: target + 50 },
-  orderbook: { bid: [{ price: 995, volume: 1000, queues: 1, changePercentage: 0 }], offer: [{ price: 1005, volume: 1000, queues: 1, changePercentage: 0 }] },
-  comprehensiveAnalysis: { score, dataCompleteness: completeness, confidence: 80, agreement: 80, label: 'Positif', horizon: 'Swing 5–20 hari', generatedAt: '', warnings: [], components: [
-    { key: 'technical', label: 'Tren', weight: 20, score: 70, available: true, metrics: [{ key: 'atr', label: 'ATR', value: 3, unit: '%', signal: 'neutral', description: '' }] },
-  ] },
-});
-
-test('decision exposes a complete actionable trade plan', () => {
-  const decision = buildTradeDecision(result(70));
-  assert.equal(decision?.verdict, 'ACTIONABLE');
-  assert.deepEqual([decision?.entryLow, decision?.entryHigh, decision?.stop, decision?.target], [1000, 1005, 955, 1150]);
-  assert.ok((decision?.riskReward ?? 0) >= 1.5);
-  assert.equal(decision?.atrPercent, 3);
-  assert.equal(decision?.positionLots, 200);
-  assert.equal(decision?.positionShares, 20_000);
-  assert.equal(decision?.riskBudget, 1_000_000);
-  assert.equal(decision?.positionValue, 20_100_000);
-  assert.equal(decision?.positionRisk, 1_000_000);
-  assert.match(decision?.invalidation ?? '', /955/);
-});
-
-test('position sizing is capped by buying power and rounded to IDX lots', () => {
-  const decision = buildTradeDecision(result(70), { accountSize: 1_000_000, riskPercent: 50, atrMultiplier: 2 });
-  assert.equal(decision?.stop, 940);
-  assert.equal(decision?.positionLots, 9);
-  assert.equal(decision?.positionShares, 900);
-  assert.equal(decision?.positionValue, 904_500);
-});
-
-test('position sizing returns zero when risk budget cannot buy one lot', () => {
-  const decision = buildTradeDecision(result(70), { accountSize: 100_000, riskPercent: 1 });
-  assert.equal(decision?.positionLots, 0);
-  assert.equal(decision?.positionValue, 0);
-});
-
-test('decision avoids a setup whose target is below entry', () => {
-  const decision = buildTradeDecision(result(70, 80, 990));
-  assert.equal(decision?.verdict, 'AVOID');
-  assert.equal(decision?.riskReward, null);
-});
-
-test('decision waits when supporting data is incomplete', () => {
-  assert.equal(buildTradeDecision(result(70, 40))?.verdict, 'WAIT');
-});
+import assert from 'node:assert/strict'; import test from 'node:test';
+import { calculateTradingDecision, roundIdxPrice } from '../lib/decision'; import { evaluateDecisionPath } from '../lib/decision-outcome';
+const base = (o: Record<string, unknown> = {}) => ({ currentPrice: 1000, bestBid: 995, bestOffer: 1000, targetRealistic: 1120, targetMaximum: 1200, ara: 1250, atrPercent: 3, priceVsSma20Percent: 0, relativeVolume: 1.4, liquidityScore: 70, brokerFlowScore: 70, signal: 'confirmed_uptrend' as const, marketRegime: 'bullish' as const, marketGateBlocked: false, hardRiskFlags: [], confidence: 80, dataCompleteness: 80, generatedAt: '2026-01-05T02:00:00Z', orderbookGeneratedAt: '2026-01-05T02:00:00Z', now: new Date('2026-01-05T02:05:00Z'), ...o });
+test('buy_now has valid levels and RR', () => { const d = calculateTradingDecision(base()); assert.equal(d.verdict, 'buy_now'); assert.ok(d.stop.price! < d.entry.reference!); assert.ok(d.targets.target1! > d.entry.reference!); assert.ok(d.riskReward.target1! >= 1.5); });
+test('wait above entry zone', () => assert.equal(calculateTradingDecision(base({ currentPrice: 1060, bestBid: 1055, bestOffer: 1060, priceVsSma20Percent: 6 })).verdict, 'wait_for_pullback'));
+test('watch on low RR', () => assert.equal(calculateTradingDecision(base({ targetRealistic: 1050, targetMaximum: 1060 })).verdict, 'watch'));
+test('avoid on hard risk', () => assert.equal(calculateTradingDecision(base({ hardRiskFlags: ['Risk'] })).verdict, 'avoid'));
+test('missing ATR stays null while market structure supplies the stop', () => { const d = calculateTradingDecision(base({ atrPercent: null })); assert.equal(d.atrPercent, null); assert.ok(d.stop.price !== null); assert.equal(d.inputs.atrPercent, null); });
+test('stored close volatility provides a deterministic stop when ATR is unavailable', () => { const d = calculateTradingDecision(base({ atrPercent: null, fallbackVolatilityPercent: 2.5 })); assert.ok(d.stop.price !== null && d.stop.price < d.entry.reference!); assert.ok(d.warnings.some((warning) => warning.includes('close-to-close'))); });
+test('invalid ATR remains insufficient without market structure', () => assert.equal(calculateTradingDecision(base({ atrPercent: -1, bestBid: null, bestOffer: null })).verdict, 'insufficient_data'));
+test('invalid legacy target is replaced by a bounded volatility target', () => { const d = calculateTradingDecision(base({ targetRealistic: 1000, targetMaximum: 900 })); assert.ok(d.targets.target1! > d.entry.reference!); assert.ok(d.warnings.some((warning) => warning.includes('tidak valid'))); });
+test('absurd legacy target is capped to swing envelope', () => { const d = calculateTradingDecision(base({ targetRealistic: 2_081_100, targetMaximum: 4_158_625, atrPercent: null, fallbackVolatilityPercent: null })); assert.ok(d.targets.target1! <= 1120); assert.ok(d.targets.target2! <= 1200); assert.ok(d.stop.price! < d.entry.reference!); });
+test('past target avoids', () => assert.equal(calculateTradingDecision(base({ currentPrice: 1130, bestBid: 1125, bestOffer: 1130, priceVsSma20Percent: 13 })).verdict, 'avoid'));
+test('volatility downgrades', () => assert.equal(calculateTradingDecision(base({ atrPercent: 7 })).verdict, 'wait_for_pullback'));
+test('poor liquidity cannot buy', () => assert.notEqual(calculateTradingDecision(base({ bestBid: 950, bestOffer: 1000, liquidityScore: 30 })).verdict, 'buy_now'));
+test('ARA and ARB are not treated as orderbook spread', () => { const d = calculateTradingDecision(base({ bestBid: null, bestOffer: null, orderbookGeneratedAt: undefined, ara: 1250 })); assert.equal(d.inputs.spreadPercent, null); assert.equal(d.freshness.orderbookFresh, false); assert.ok(d.warnings.some((warning) => warning.includes('ARA/ARB'))); });
+test('historical snapshot is unavailable, not stale realtime', () => { const d = calculateTradingDecision(base({ bestBid: null, bestOffer: null, orderbookGeneratedAt: undefined, historicalSnapshot: true })); assert.equal(d.freshness.executionDataStatus, 'historical_unavailable'); assert.equal(d.freshness.refreshRequired, false); assert.notEqual(d.verdict, 'buy_now'); });
+test('IDX rounding bands', () => { assert.equal(roundIdxPrice(501, 'up'), 505); assert.equal(roundIdxPrice(1999, 'up'), 2000); assert.equal(roundIdxPrice(4999, 'up'), 5000); });
+test('ratios never NaN or Infinity', () => { const d = calculateTradingDecision(base({ targetRealistic: null })); assert.ok(d.riskReward.target1 === null || Number.isFinite(d.riskReward.target1)); });
+test('market gate overrides positive setup', () => assert.equal(calculateTradingDecision(base({ marketGateBlocked: true, marketRegime: 'bearish' })).verdict, 'avoid'));
+test('sizing absent without profile', () => assert.equal(calculateTradingDecision(base()).positionSizing, null));
+test('expired and ambiguous outcomes', () => { assert.equal(evaluateDecisionPath([{ high: 980, low: 970, close: 975 }], 990, 1010, 960, 1100, 1).status, 'expired_no_entry'); assert.equal(evaluateDecisionPath([{ high: 1110, low: 950, close: 1000 }], 990, 1010, 960, 1100, 5).status, 'ambiguous'); });

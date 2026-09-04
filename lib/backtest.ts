@@ -80,6 +80,11 @@ export function segmentBacktest(rows: Array<Record<string, unknown>>, config: Ba
     completenessBucket: (r) => qualityBucket((r.snapshot as { data_completeness?: unknown; feature_snapshot?: { analysis_quality?: { completeness?: unknown } } } | undefined)?.data_completeness ?? (r.snapshot as { feature_snapshot?: { analysis_quality?: { completeness?: unknown } } } | undefined)?.feature_snapshot?.analysis_quality?.completeness),
     dominantDirection: (r) => String((r.snapshot as { dominant_direction?: unknown; feature_snapshot?: { analysis_quality?: { dominantDirection?: unknown } } } | undefined)?.dominant_direction ?? (r.snapshot as { feature_snapshot?: { analysis_quality?: { dominantDirection?: unknown } } } | undefined)?.feature_snapshot?.analysis_quality?.dominantDirection ?? 'unknown'),
     marketRegime: (r) => String((r.snapshot as { feature_snapshot?: { market_regime?: unknown } } | undefined)?.feature_snapshot?.market_regime ?? 'unknown'),
+    baseSignal: (r) => String((r.snapshot as { feature_snapshot?: { gate?: { signalBeforeGate?: unknown } } } | undefined)?.feature_snapshot?.gate?.signalBeforeGate ?? 'legacy_unavailable'),
+    finalSignal: (r) => String((r.snapshot as { feature_snapshot?: { gate?: { signalAfterGate?: unknown } } } | undefined)?.feature_snapshot?.gate?.signalAfterGate ?? (r.snapshot as { signal?: unknown } | undefined)?.signal ?? 'unknown'),
+    relativeStrength: (r) => String((r.snapshot as { feature_snapshot?: { relative_strength?: { label?: unknown } } } | undefined)?.feature_snapshot?.relative_strength?.label ?? 'unavailable'),
+    exceptionalStrength: (r) => String((r.snapshot as { feature_snapshot?: { gate?: { exceptionalStrength?: unknown } } } | undefined)?.feature_snapshot?.gate?.exceptionalStrength ?? 'legacy_unavailable'),
+    gateAction: (r) => String((r.snapshot as { feature_snapshot?: { gate?: { gateAction?: unknown; applied?: unknown } } } | undefined)?.feature_snapshot?.gate?.gateAction ?? ((r.snapshot as { feature_snapshot?: { gate?: { applied?: unknown } } } | undefined)?.feature_snapshot?.gate?.applied === true ? 'downgrade' : 'none')),
     sector: (r) => String((r.snapshot as { feature_snapshot?: { sector?: unknown } } | undefined)?.feature_snapshot?.sector ?? 'unknown'),
     period: (r) => String(r.signal_date ?? '').slice(0, 7) || 'unknown',
   };

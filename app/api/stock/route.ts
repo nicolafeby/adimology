@@ -192,6 +192,10 @@ export async function POST(request: NextRequest) {
     const marketRegime = calculateMarketRegime(benchmarkHistory);
     const relativeStrength = calculateRelativeStrength(historicalData, benchmarkHistory);
     const classification = classifyTrendWithMarketGate(comprehensiveAnalysis, marketRegime, relativeStrength);
+    comprehensiveAnalysis.marketRegime = marketRegime;
+    comprehensiveAnalysis.relativeStrength = relativeStrength;
+    comprehensiveAnalysis.exceptionalStrength = classification.gate.exceptionalStrengthCheck;
+    comprehensiveAnalysis.gateResult = classification.gate;
     const storedPrices = brokerHistory
       .map((row) => ({ date: String(row.from_date), price: Number(row.harga) }))
       .filter((row) => Number.isFinite(row.price) && row.price > 0)

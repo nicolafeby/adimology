@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { loadBacktestConfig, segmentBacktest, summarizeBacktest } from '@/lib/backtest';
 import { getBacktestRows } from '@/lib/supabase';
-import { RANKING_MODEL_VERSION } from '@/lib/model-version';
+import { ACTIVE_MODEL_VERSION } from '@/lib/model-versions';
 
 export async function GET() {
   try {
-    const rows = await getBacktestRows(RANKING_MODEL_VERSION);
+    const rows = await getBacktestRows(ACTIVE_MODEL_VERSION);
     const config = loadBacktestConfig();
     const current = rows.filter((row) => row.backtest_config_version === config.configVersion);
     const primaryRows = current.length ? current : rows.filter((row) => row.backtest_config_version == null);

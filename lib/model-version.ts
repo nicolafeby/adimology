@@ -1,2 +1,3 @@
 /** Bump whenever ranking features or signal classification semantics change. */
-export const RANKING_MODEL_VERSION = 'multifactor-quality-v5';
+/** @deprecated Import ACTIVE_MODEL_VERSION from model-versions for new code. */
+export { ACTIVE_MODEL_VERSION as RANKING_MODEL_VERSION } from './model-versions';

@@ -51,5 +51,7 @@ export async function analyzeSymbol(symbol: string, analysisDate: string, benchm
   const marketRegime = calculateMarketRegime(asOfMarket);
   const relativeStrength = calculateRelativeStrength(asOfHistory, asOfMarket, asOfSector);
   const analysis = buildComprehensiveAnalysis({ brokerSummary, orderbook, lastPrice, history: asOfHistory, keyStats, benchmarkHistory: asOfMarket, brokerHistory, catalyst });
+  analysis.marketRegime = marketRegime;
+  analysis.relativeStrength = relativeStrength;
   return { symbol: emiten, sector: info?.data?.sector, brokerData, brokerSummary, orderbook, history: asOfHistory, lastPrice, ara, arb, totalBid, totalOffer, targets, analysis, catalyst, marketRegime, relativeStrength };
 }

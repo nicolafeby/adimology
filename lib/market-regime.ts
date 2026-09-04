@@ -1,149 +1,53 @@
 import type { HistoricalSummaryItem } from './stockbit';
-import type { MarketRegimeAnalysis, RelativeStrengthAnalysis, RelativeStrengthLabel, TrendSignal } from './types';
+import type { ExceptionalStrengthCheck, MarketGateAudit, MarketRegimeAnalysis, RelativeStrengthAnalysis, RelativeStrengthLabel, TrendSignal } from './types';
+import { ACTIVE_REGIME_METHODOLOGY_VERSION, ACTIVE_RELATIVE_STRENGTH_METHODOLOGY_VERSION } from './model-versions';
 
-/** Central calibration knobs. Percent values use percentage points, not decimals. */
-export const MARKET_REGIME_THRESHOLDS = {
-  minimumSessions: 21, // Required for a true 20-session return.
-  trendLookbackSessions: 5, // Compares today's SMA20 with SMA20 five sessions ago.
-  bullishScore: 65,
-  bearishScore: 40,
-  positiveReturn5d: 0,
-  strongReturn20d: 3,
-  relativeVolumeConfirmation: 1.1,
-} as const;
-
-export const RELATIVE_STRENGTH_THRESHOLDS = {
-  strong5d: 2,
-  strong20d: 5,
-  moderate5d: 0,
-  moderate20d: 0,
-  exceptional5d: 4,
-  exceptional20d: 8,
-  exceptionalRelativeVolume: 1.2,
-  exceptionalBrokerFlow: 60,
-  exceptionalCompleteness: 75,
-} as const;
-
-export interface HistoricalFeatures {
-  sessions: number;
-  latestClose: number | null;
-  return5d: number | null;
-  return20d: number | null;
-  sma20: number | null;
-  priceVsSma20: number | null;
-  sma20Trend: number | null;
-  relativeVolume: number | null;
-}
-
+export const MARKET_BENCHMARK_SYMBOL = 'COMPOSITE';
+export const MARKET_REGIME_THRESHOLDS = Object.freeze({ minimumSessions: 25, slopeLookbackSessions: 5 });
+export const RELATIVE_STRENGTH_THRESHOLDS = Object.freeze({ strong5d: 3, strong20d: 7, moderate5d: 0, moderate20d: 0, materiallyWeak: -1 });
+export const EXCEPTIONAL_STRENGTH_THRESHOLDS = Object.freeze({ rsMarket5d: 3, rsMarket20d: 7, stockReturn5d: 0, distanceFromSma20: 0, relativeVolume: 1.2, brokerFlowScore: 65, dataCompleteness: 80, liquidityScore: 50 });
+export interface HistoricalFeatures { sessions: number; latestClose: number | null; return5d: number | null; return20d: number | null; sma20: number | null; priceVsSma20: number | null; sma20Trend: number | null; relativeVolume: number | null }
+const finitePositive = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0;
 const round = (value: number, digits = 2) => Number(value.toFixed(digits));
-const sortedRows = (history: HistoricalSummaryItem[]) => [...history]
-  .filter((row) => Number.isFinite(row.close) && row.close > 0)
-  .sort((a, b) => a.date.localeCompare(b.date));
+const clamp = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
+const rowsAsOf = (history: HistoricalSummaryItem[]) => { const byDate = new Map<string, HistoricalSummaryItem>(); for (const row of history) if (/^\d{4}-\d{2}-\d{2}/.test(row.date) && finitePositive(row.close)) byDate.set(row.date.slice(0, 10), row); return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)); };
 
 export function calculateHistoricalFeatures(history: HistoricalSummaryItem[]): HistoricalFeatures {
-  const rows = sortedRows(history);
-  const latest = rows.at(-1);
-  if (!latest) return { sessions: 0, latestClose: null, return5d: null, return20d: null, sma20: null, priceVsSma20: null, sma20Trend: null, relativeVolume: null };
-  const returnAt = (sessions: number) => rows.length > sessions
-    ? round((latest.close / rows[rows.length - 1 - sessions].close - 1) * 100)
-    : null;
-  const sma = (endExclusive: number) => {
-    if (endExclusive < 20) return null;
-    const window = rows.slice(endExclusive - 20, endExclusive);
-    return window.reduce((sum, row) => sum + row.close, 0) / 20;
-  };
-  const sma20 = sma(rows.length);
-  const previousSma20 = sma(rows.length - MARKET_REGIME_THRESHOLDS.trendLookbackSessions);
-  const volumes = rows.slice(-20).map((row) => row.volume).filter((value) => Number.isFinite(value) && value > 0);
-  const averageVolume = volumes.length === 20 ? volumes.reduce((sum, value) => sum + value, 0) / 20 : null;
-  return {
-    sessions: rows.length,
-    latestClose: latest.close,
-    return5d: returnAt(5),
-    return20d: returnAt(20),
-    sma20: sma20 === null ? null : round(sma20),
-    priceVsSma20: sma20 === null ? null : round((latest.close / sma20 - 1) * 100),
-    sma20Trend: sma20 === null || previousSma20 === null ? null : round((sma20 / previousSma20 - 1) * 100),
-    relativeVolume: averageVolume && latest.volume > 0 ? round(latest.volume / averageVolume) : null,
-  };
+  const rows = rowsAsOf(history), latest = rows.at(-1), empty = { sessions: rows.length, latestClose: null, return5d: null, return20d: null, sma20: null, priceVsSma20: null, sma20Trend: null, relativeVolume: null };
+  if (!latest) return empty;
+  const returnAt = (n: number) => rows.length > n ? round((latest.close / rows[rows.length - 1 - n].close - 1) * 100) : null;
+  const smaAt = (end: number) => end >= 20 ? rows.slice(end - 20, end).reduce((sum, row) => sum + row.close, 0) / 20 : null;
+  const sma20 = smaAt(rows.length), previousSma20 = smaAt(rows.length - MARKET_REGIME_THRESHOLDS.slopeLookbackSessions), volumeRows = rows.slice(-20), volumes = volumeRows.map((row) => row.volume).filter(finitePositive), averageVolume20 = volumes.length === 20 ? volumes.reduce((a, b) => a + b, 0) / 20 : null;
+  return { sessions: rows.length, latestClose: latest.close, return5d: returnAt(5), return20d: returnAt(20), sma20: sma20 === null ? null : round(sma20), priceVsSma20: sma20 === null ? null : round((latest.close / sma20 - 1) * 100), sma20Trend: sma20 === null || previousSma20 === null ? null : round((sma20 / previousSma20 - 1) * 100), relativeVolume: averageVolume20 !== null && finitePositive(latest.volume) ? round(latest.volume / averageVolume20) : null };
 }
 
 export function calculateMarketRegime(history: HistoricalSummaryItem[]): MarketRegimeAnalysis {
-  const features = calculateHistoricalFeatures(history);
-  const values = [features.priceVsSma20, features.return5d, features.return20d, features.sma20Trend];
-  const known = values.filter((value): value is number => value !== null);
-  const completeness = Math.round(known.length / values.length * 100);
-  if (features.sessions < MARKET_REGIME_THRESHOLDS.minimumSessions || features.priceVsSma20 === null || features.return20d === null) {
-    return { label: 'unavailable', score: null, reasons: [`Histori IHSG hanya ${features.sessions} sesi; minimal ${MARKET_REGIME_THRESHOLDS.minimumSessions} sesi diperlukan.`], dataCompleteness: completeness, features };
-  }
-  let score = 50;
-  score += features.priceVsSma20 >= 0 ? 15 : -15;
-  score += (features.return5d ?? 0) > MARKET_REGIME_THRESHOLDS.positiveReturn5d ? 10 : -10;
-  score += features.return20d >= MARKET_REGIME_THRESHOLDS.strongReturn20d ? 15 : features.return20d < 0 ? -15 : 0;
-  if (features.sma20Trend !== null) score += features.sma20Trend > 0 ? 10 : features.sma20Trend < 0 ? -10 : 0;
-  if (features.relativeVolume !== null && features.relativeVolume >= MARKET_REGIME_THRESHOLDS.relativeVolumeConfirmation) {
-    score += Math.sign(features.return5d ?? 0) * 5;
-  }
-  score = Math.max(0, Math.min(100, Math.round(score)));
-  const label = score >= MARKET_REGIME_THRESHOLDS.bullishScore ? 'bullish' : score <= MARKET_REGIME_THRESHOLDS.bearishScore ? 'bearish' : 'neutral';
-  const reasons = [
-    `IHSG ${features.priceVsSma20 >= 0 ? 'di atas' : 'di bawah'} SMA20 (${features.priceVsSma20 >= 0 ? '+' : ''}${features.priceVsSma20}%).`,
-    `Return IHSG 5D ${features.return5d! >= 0 ? '+' : ''}${features.return5d}% dan 20D ${features.return20d >= 0 ? '+' : ''}${features.return20d}%.`,
-    features.sma20Trend === null ? 'Tren SMA20 belum tersedia.' : `Tren SMA20 ${features.sma20Trend >= 0 ? 'naik' : 'turun'} ${Math.abs(features.sma20Trend)}%.`,
-  ];
-  return { label, score, reasons, dataCompleteness: completeness, features };
+  const rows = rowsAsOf(history), features = calculateHistoricalFeatures(rows), core = [features.return5d, features.return20d, features.priceVsSma20, features.sma20Trend], completeness = Math.round((core.filter((v) => v !== null).length + (features.relativeVolume !== null ? 1 : 0)) / 5 * 100), metrics = { return5d: features.return5d, return20d: features.return20d, distanceFromSma20: features.priceVsSma20, sma20Slope: features.sma20Trend, relativeVolume: features.relativeVolume };
+  if (features.sessions < MARKET_REGIME_THRESHOLDS.minimumSessions || core.some((v) => v === null)) return { label: 'unavailable', regime: 'unavailable', score: null, confidence: 0, completeness, dataCompleteness: completeness, metrics, features, reasons: [], warnings: [`Histori ${MARKET_BENCHMARK_SYMBOL} tidak cukup; ${MARKET_REGIME_THRESHOLDS.minimumSessions} sesi valid diperlukan.`], observedAt: rows.at(-1)?.date ?? null, methodologyVersion: ACTIVE_REGIME_METHODOLOGY_VERSION };
+  const bullish = features.priceVsSma20! > 0 && features.return5d! > 0 && features.return20d! > 0 && features.sma20Trend! >= 0, bearish = features.priceVsSma20! < 0 && features.return5d! < 0 && features.return20d! < 0 && features.sma20Trend! <= 0, regime = bullish ? 'bullish' : bearish ? 'bearish' : 'neutral';
+  let score = 50 + Math.max(-20, Math.min(20, features.priceVsSma20! * 2)) + Math.max(-10, Math.min(10, features.return5d!)) + Math.max(-15, Math.min(15, features.return20d! / 2)) + Math.max(-10, Math.min(10, features.sma20Trend! * 5)); if (features.relativeVolume !== null && features.relativeVolume >= 1.1) score += Math.sign(features.return5d!) * 5;
+  return { label: regime, regime, score: clamp(score), confidence: completeness, completeness, dataCompleteness: completeness, metrics, features, reasons: [`IHSG ${features.priceVsSma20! >= 0 ? 'di atas' : 'di bawah'} SMA20 (${features.priceVsSma20! >= 0 ? '+' : ''}${features.priceVsSma20}%).`, `Return IHSG 5D ${features.return5d! >= 0 ? '+' : ''}${features.return5d}% dan 20D ${features.return20d! >= 0 ? '+' : ''}${features.return20d}%.`, `Slope SMA20 ${features.sma20Trend! >= 0 ? '+' : ''}${features.sma20Trend}%.`], warnings: features.relativeVolume === null ? ['Volume benchmark tidak lengkap; regime ditentukan dari harga.'] : [], observedAt: rows.at(-1)?.date ?? null, methodologyVersion: ACTIVE_REGIME_METHODOLOGY_VERSION };
 }
 
-export function calculateRelativeStrength(stockHistory: HistoricalSummaryItem[], marketHistory: HistoricalSummaryItem[], sectorHistory?: HistoricalSummaryItem[]): RelativeStrengthAnalysis {
-  const stock = calculateHistoricalFeatures(stockHistory);
-  const market = calculateHistoricalFeatures(marketHistory);
-  const sector = sectorHistory ? calculateHistoricalFeatures(sectorHistory) : null;
-  const subtract = (left: number | null, right: number | null) => left === null || right === null ? null : round(left - right);
-  const rs5d = subtract(stock.return5d, market.return5d);
-  const rs20d = subtract(stock.return20d, market.return20d);
-  const sectorRs5d = sector ? subtract(stock.return5d, sector.return5d) : null;
-  const sectorRs20d = sector ? subtract(stock.return20d, sector.return20d) : null;
-  let label: RelativeStrengthLabel = 'unavailable';
-  if (rs5d !== null && rs20d !== null) {
-    label = rs5d >= RELATIVE_STRENGTH_THRESHOLDS.strong5d && rs20d >= RELATIVE_STRENGTH_THRESHOLDS.strong20d
-      ? 'strong'
-      : rs5d >= RELATIVE_STRENGTH_THRESHOLDS.moderate5d && rs20d >= RELATIVE_STRENGTH_THRESHOLDS.moderate20d ? 'moderate' : 'weak';
-  }
-  return { label, rs5d, rs20d, sectorRs5d, sectorRs20d, stockReturn5d: stock.return5d, stockReturn20d: stock.return20d, marketReturn5d: market.return5d, marketReturn20d: market.return20d, sectorReturn5d: sector?.return5d ?? null, sectorReturn20d: sector?.return20d ?? null, dataCompleteness: Math.round([rs5d, rs20d].filter((value) => value !== null).length / 2 * 100) };
+const classifyRs = (a: number | null, b: number | null): RelativeStrengthLabel => a === null || b === null ? 'unavailable' : a >= 3 && b >= 7 ? 'strong' : a > 0 && b > 0 ? 'moderate' : 'weak';
+export function calculateRelativeStrength(stockHistory: HistoricalSummaryItem[], marketHistory: HistoricalSummaryItem[], sectorHistory?: HistoricalSummaryItem[], sectorBenchmarkSymbol: string | null = null): RelativeStrengthAnalysis {
+  const stockRows = rowsAsOf(stockHistory), marketRows = rowsAsOf(marketHistory), sectorRows = sectorHistory ? rowsAsOf(sectorHistory) : [], stock = calculateHistoricalFeatures(stockRows), market = calculateHistoricalFeatures(marketRows), sector = sectorHistory ? calculateHistoricalFeatures(sectorRows) : null, subtract = (a: number | null, b: number | null) => a === null || b === null ? null : round(a - b), rs5d = subtract(stock.return5d, market.return5d), rs20d = subtract(stock.return20d, market.return20d), sectorRs5d = subtract(stock.return5d, sector?.return5d ?? null), sectorRs20d = subtract(stock.return20d, sector?.return20d ?? null), label = classifyRs(rs5d, rs20d), sectorLabel = classifyRs(sectorRs5d, sectorRs20d), completeness = Math.round([stock.return5d, stock.return20d, market.return5d, market.return20d].filter((v) => v !== null).length / 4 * 100), score = rs5d === null || rs20d === null ? null : clamp(50 + rs5d * 4 + rs20d * 2), warnings = label === 'unavailable' ? ['Histori saham atau COMPOSITE tidak cukup untuk menghitung RS.'] : [];
+  if (!sectorHistory || sectorLabel === 'unavailable') warnings.push('Benchmark sektor belum tersedia; Sector RS tidak dihitung.');
+  return { label, combinedLabel: label, rs5d, rs20d, sectorRs5d, sectorRs20d, stockReturn5d: stock.return5d, stockReturn20d: stock.return20d, marketReturn5d: market.return5d, marketReturn20d: market.return20d, sectorReturn5d: sector?.return5d ?? null, sectorReturn20d: sector?.return20d ?? null, dataCompleteness: completeness, completeness, score, versusMarket: { rs5d, rs20d, label }, versusSector: { rs5d: sectorRs5d, rs20d: sectorRs20d, label: sectorLabel, benchmarkSymbol: sectorBenchmarkSymbol }, reasons: label === 'unavailable' ? [] : [`RS vs IHSG 5D ${rs5d! >= 0 ? '+' : ''}${rs5d}% dan 20D ${rs20d! >= 0 ? '+' : ''}${rs20d}%.`], warnings, benchmarkSymbol: MARKET_BENCHMARK_SYMBOL, observedAt: { stock: stockRows.at(-1)?.date ?? null, market: marketRows.at(-1)?.date ?? null, sector: sectorRows.at(-1)?.date ?? null }, methodologyVersion: ACTIVE_RELATIVE_STRENGTH_METHODOLOGY_VERSION };
 }
 
-export function hasExceptionalRelativeStrength(input: { relativeStrength: RelativeStrengthAnalysis; relativeVolume: number | null; brokerFlowScore: number | null; dataCompleteness: number }): boolean {
-  const { relativeStrength: rs } = input;
-  return rs.rs5d !== null && rs.rs20d !== null
-    && rs.rs5d >= RELATIVE_STRENGTH_THRESHOLDS.exceptional5d
-    && rs.rs20d >= RELATIVE_STRENGTH_THRESHOLDS.exceptional20d
-    && input.relativeVolume !== null && input.relativeVolume >= RELATIVE_STRENGTH_THRESHOLDS.exceptionalRelativeVolume
-    && input.brokerFlowScore !== null && input.brokerFlowScore >= RELATIVE_STRENGTH_THRESHOLDS.exceptionalBrokerFlow
-    && input.dataCompleteness >= RELATIVE_STRENGTH_THRESHOLDS.exceptionalCompleteness;
+export function evaluateExceptionalStrength(input: { relativeStrength: RelativeStrengthAnalysis; stockReturn5d: number | null; distanceFromSma20: number | null; relativeVolume: number | null; brokerFlowScore: number | null; dataCompleteness: number; hardRiskFlags: string[]; liquidityScore: number | null }): ExceptionalStrengthCheck {
+  const t = EXCEPTIONAL_STRENGTH_THRESHOLDS, specs: Array<[string, number | boolean | null, number | boolean | string, boolean, string]> = [['rs_market_5d', input.relativeStrength.rs5d, `>= ${t.rsMarket5d}%`, input.relativeStrength.rs5d !== null && input.relativeStrength.rs5d >= t.rsMarket5d, 'RS vs IHSG 5D'], ['rs_market_20d', input.relativeStrength.rs20d, `>= ${t.rsMarket20d}%`, input.relativeStrength.rs20d !== null && input.relativeStrength.rs20d >= t.rsMarket20d, 'RS vs IHSG 20D'], ['stock_return_5d', input.stockReturn5d, '> 0%', input.stockReturn5d !== null && input.stockReturn5d > 0, 'Return saham 5D positif'], ['above_sma20', input.distanceFromSma20, '> 0%', input.distanceFromSma20 !== null && input.distanceFromSma20 > 0, 'Harga di atas SMA20'], ['relative_volume', input.relativeVolume, `>= ${t.relativeVolume}x`, input.relativeVolume !== null && input.relativeVolume >= t.relativeVolume, 'Relative volume'], ['broker_flow', input.brokerFlowScore, `>= ${t.brokerFlowScore}`, input.brokerFlowScore !== null && input.brokerFlowScore >= t.brokerFlowScore, 'Broker flow'], ['data_completeness', input.dataCompleteness, `>= ${t.dataCompleteness}%`, input.dataCompleteness >= t.dataCompleteness, 'Kelengkapan data'], ['hard_risk_flags', input.hardRiskFlags.length === 0, true, input.hardRiskFlags.length === 0, 'Tidak ada hard risk flag'], ['liquidity', input.liquidityScore, `>= ${t.liquidityScore}`, input.liquidityScore !== null && input.liquidityScore >= t.liquidityScore, 'Likuiditas minimum']];
+  const checks = specs.map(([key, actualValue, requiredValue, passed, explanation]) => ({ key, actualValue, requiredValue, passed, explanation })); return { passed: checks.every((check) => check.passed), checks };
 }
+export const hasExceptionalRelativeStrength = (input: Parameters<typeof evaluateExceptionalStrength>[0]) => evaluateExceptionalStrength(input).passed;
 
-export function applyMarketRegimeGate(input: { signal: TrendSignal; marketRegime: MarketRegimeAnalysis; relativeStrength: RelativeStrengthAnalysis; relativeVolume: number | null; brokerFlowScore: number | null; dataCompleteness: number; confidence?: number }) {
-  const exceptional = hasExceptionalRelativeStrength(input);
-  let signalAfterGate = input.signal;
-  let applied = false;
-  let confidenceAdjustment = 0;
-  let reason = 'Market regime hanya menjadi modifier; tidak menaikkan sinyal dasar.';
-  const riskFlags: string[] = [];
-  if (input.marketRegime.label === 'unavailable') {
-    confidenceAdjustment = -15;
-    riskFlags.push('Market regime IHSG tidak tersedia; confidence perlu diturunkan');
-    reason = 'Market regime tidak tersedia; sinyal tidak dinaikkan dan diberi risk flag.';
-  } else if (input.marketRegime.label === 'bearish' && input.signal === 'confirmed_uptrend' && !exceptional) {
-    signalAfterGate = input.dataCompleteness >= 70 && input.relativeStrength.label !== 'weak' && input.relativeStrength.label !== 'unavailable' ? 'early_uptrend' : 'watch';
-    applied = true;
-    reason = input.relativeStrength.rs20d !== null && input.relativeStrength.rs20d > 0
-      ? 'Saham mengungguli IHSG, tetapi belum memenuhi exceptional-strength gate.'
-      : 'Regime IHSG bearish dan relative strength belum cukup untuk mempertahankan konfirmasi.';
-    riskFlags.push('Confirmed Uptrend dibatasi oleh regime IHSG bearish');
-  } else if (input.marketRegime.label === 'bearish' && input.signal === 'confirmed_uptrend' && exceptional) {
-    reason = 'Exceptional relative strength terpenuhi; sinyal dasar dipertahankan meski IHSG bearish.';
-  }
-  const confidenceBefore = typeof input.confidence === 'number' ? input.confidence : null;
-  const confidenceAfter = confidenceBefore === null ? null : Math.max(0, Math.min(100, confidenceBefore + confidenceAdjustment));
-  return { applied, signalBeforeGate: input.signal, signalAfterGate, exceptionalStrength: exceptional, reason, confidenceAdjustment, confidenceBefore, confidenceAfter, riskFlags };
+export function applyMarketRegimeGate(input: { signal: TrendSignal; marketRegime: MarketRegimeAnalysis; relativeStrength: RelativeStrengthAnalysis; stockReturn5d?: number | null; distanceFromSma20?: number | null; relativeVolume: number | null; brokerFlowScore: number | null; liquidityScore?: number | null; dataCompleteness: number; hardRiskFlags?: string[]; confidence?: number }): MarketGateAudit {
+  const hardRiskFlags = input.hardRiskFlags ?? [], exceptionalStrengthCheck = evaluateExceptionalStrength({ relativeStrength: input.relativeStrength, stockReturn5d: input.stockReturn5d ?? input.relativeStrength.stockReturn5d, distanceFromSma20: input.distanceFromSma20 ?? null, relativeVolume: input.relativeVolume, brokerFlowScore: input.brokerFlowScore, liquidityScore: input.liquidityScore ?? null, dataCompleteness: input.dataCompleteness, hardRiskFlags });
+  let signalAfterGate = input.signal, gateAction: MarketGateAudit['gateAction'] = 'none', confidenceAdjustment = 0; const gateReasons: string[] = [], riskFlags: string[] = [], regime = input.marketRegime.regime ?? input.marketRegime.label;
+  if (regime === 'unavailable') { confidenceAdjustment = -15; riskFlags.push('Market regime IHSG tidak tersedia'); gateReasons.push('Benchmark pasar wajib tidak tersedia; Confirmed Uptrend diblokir.'); if (input.signal === 'confirmed_uptrend') { signalAfterGate = input.dataCompleteness >= 70 ? 'early_uptrend' : 'watch'; gateAction = 'block_unavailable'; } }
+  else if (regime === 'bearish') { riskFlags.push('Pasar sedang bearish'); if (input.signal === 'confirmed_uptrend' && exceptionalStrengthCheck.passed) { gateAction = 'retain_exceptional'; gateReasons.push('Seluruh hard requirement exceptional relative strength terpenuhi.'); } else if (input.signal === 'confirmed_uptrend') { signalAfterGate = input.relativeStrength.label === 'weak' || hardRiskFlags.length ? 'watch' : 'early_uptrend'; gateAction = 'downgrade'; gateReasons.push(`Regime bearish dan exceptional checklist hanya memenuhi ${exceptionalStrengthCheck.checks.filter((c) => c.passed).length}/${exceptionalStrengthCheck.checks.length} syarat.`); } else if (input.signal === 'early_uptrend' && input.relativeStrength.label === 'weak') { signalAfterGate = 'watch'; gateAction = 'downgrade'; gateReasons.push('Regime bearish disertai relative strength lemah.'); } }
+  else if (input.signal === 'confirmed_uptrend' && input.relativeStrength.label === 'weak') { signalAfterGate = 'early_uptrend'; gateAction = 'downgrade'; gateReasons.push('Relative strength lemah menurunkan sinyal.'); }
+  if (!gateReasons.length) gateReasons.push('Market regime tidak menaikkan sinyal dasar.'); const confidenceBefore = typeof input.confidence === 'number' && Number.isFinite(input.confidence) ? input.confidence : null, confidenceAfter = confidenceBefore === null ? null : clamp(confidenceBefore + confidenceAdjustment);
+  return { applied: signalAfterGate !== input.signal, signalBeforeGate: input.signal, signalAfterGate, exceptionalStrength: exceptionalStrengthCheck.passed, exceptionalStrengthCheck, gateAction, gateReasons, reason: gateReasons.join(' '), confidenceAdjustment, confidenceBefore, confidenceAfter, riskFlags };
 }

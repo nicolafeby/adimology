@@ -8,12 +8,11 @@ import { evaluateMatureSignals } from './outcome-service';
 import { fetchIdxListedCompanies } from './idx';
 import { generateAiStory } from './ai-story-service';
 import { calculateMarketRegime } from './market-regime';
-import { RANKING_MODEL_VERSION } from './model-version';
 import { calculateTradingDecision } from './decision';
 import { getCalibratedProbability } from './calibration-service';
-import { ACTIVE_EXECUTION_MODEL, ACTIVE_OUTCOME_DEFINITION, ACTIVE_REGIME_METHODOLOGY_VERSION, ACTIVE_SELECTION_SCOPE, buildCalibrationContext } from './model-versions';
+import { ACTIVE_EXECUTION_MODEL, ACTIVE_MODEL_VERSION, ACTIVE_OUTCOME_DEFINITION, ACTIVE_REGIME_METHODOLOGY_VERSION, ACTIVE_RELATIVE_STRENGTH_METHODOLOGY_VERSION, ACTIVE_SELECTION_SCOPE, buildCalibrationContext } from './model-versions';
 
-const MODEL_VERSION = RANKING_MODEL_VERSION;
+const MODEL_VERSION = ACTIVE_MODEL_VERSION;
 
 async function mapConcurrent<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
   const results: PromiseSettledResult<R>[] = new Array(items.length);
@@ -87,6 +86,8 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     const result = await analyzeSymbol(company.symbol, analysisDate, { marketHistory });
     const calibrated = await getCalibratedProbability(buildCalibrationContext({ score: result.analysis.score, marketRegime: marketRegime.label, analysisDate, methodologyVersion: result.analysis.methodologyVersion }));
     const classification = classifyTrendWithMarketGate(result.analysis, result.marketRegime, result.relativeStrength);
+    result.analysis.exceptionalStrength = classification.gate.exceptionalStrengthCheck;
+    result.analysis.gateResult = classification.gate;
     return { result, calibrated, classification };
   });
   const quantitativeCandidates = deepResults.flatMap((item, index) => {
@@ -148,6 +149,8 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     const result = await analyzeSymbol(previous.symbol, analysisDate, { marketHistory });
     const calibrated = await getCalibratedProbability(buildCalibrationContext({ score: result.analysis.score, marketRegime: marketRegime.label, analysisDate, methodologyVersion: result.analysis.methodologyVersion }));
     const classification = classifyTrendWithMarketGate(result.analysis, result.marketRegime, result.relativeStrength);
+    result.analysis.exceptionalStrength = classification.gate.exceptionalStrengthCheck;
+    result.analysis.gateResult = classification.gate;
     return { result, calibrated, classification, sortScore: rankingScore(result.analysis, calibrated?.probability ?? null) };
   });
   const eligible = rescoredResults.flatMap((item, index) => {

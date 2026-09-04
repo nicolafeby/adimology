@@ -15,7 +15,7 @@ const rs = (rs5d: number | null, rs20d: number | null): RelativeStrengthAnalysis
 
 test('IHSG bullish and a stronger stock produce strong relative strength', () => {
   const market = history(0.003);
-  const stock = history(0.008);
+  const stock = history(0.01);
   assert.equal(calculateMarketRegime(market).label, 'bullish');
   assert.equal(calculateRelativeStrength(stock, market).label, 'strong');
 });
@@ -27,9 +27,10 @@ test('bearish IHSG downgrades an ordinary confirmed signal', () => {
 });
 
 test('exceptional relative strength can retain confirmation in a bearish market', () => {
-  const result = applyMarketRegimeGate({ signal: 'confirmed_uptrend', marketRegime: regime('bearish'), relativeStrength: rs(5, 10), relativeVolume: 1.3, brokerFlowScore: 70, dataCompleteness: 80 });
+  const result = applyMarketRegimeGate({ signal: 'confirmed_uptrend', marketRegime: regime('bearish'), relativeStrength: { ...rs(5, 10), stockReturn5d: 4 }, stockReturn5d: 4, distanceFromSma20: 3, relativeVolume: 1.3, brokerFlowScore: 70, liquidityScore: 60, hardRiskFlags: [], dataCompleteness: 80 });
   assert.equal(result.exceptionalStrength, true);
   assert.equal(result.signalAfterGate, 'confirmed_uptrend');
+  assert.equal(result.gateAction, 'retain_exceptional');
 });
 
 test('missing benchmark remains unavailable and never becomes zero', () => {
@@ -61,7 +62,8 @@ test('bullish market never upgrades a weak base signal', () => {
 
 test('unavailable market adds risk without treating it as neutral', () => {
   const result = applyMarketRegimeGate({ signal: 'confirmed_uptrend', marketRegime: regime('unavailable'), relativeStrength: rs(null, null), relativeVolume: null, brokerFlowScore: null, dataCompleteness: 80, confidence: 72 });
-  assert.equal(result.signalAfterGate, 'confirmed_uptrend');
+  assert.equal(result.signalAfterGate, 'early_uptrend');
+  assert.equal(result.gateAction, 'block_unavailable');
   assert.ok(result.riskFlags.some((flag) => flag.includes('tidak tersedia')));
   assert.equal(result.exceptionalStrength, false);
   assert.equal(result.confidenceAfter, 57);

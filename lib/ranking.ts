@@ -88,7 +88,11 @@ export function classifyTrendWithMarketGate(analysis: ComprehensiveAnalysis, mar
     relativeStrength,
     relativeVolume: metricNumber(analysis.components, 'volumeRatio'),
     brokerFlowScore: analysis.components.find((item) => item.key === 'brokerFlow')?.score ?? null,
+    liquidityScore: analysis.components.find((item) => item.key === 'liquidity')?.score ?? null,
+    stockReturn5d: metricNumber(analysis.components, 'return5d'),
+    distanceFromSma20: metricNumber(analysis.components, 'sma20'),
     dataCompleteness: analysis.dataCompleteness,
+    hardRiskFlags: base.riskFlags,
     confidence: analysis.confidence,
   });
   const reasons = [...base.reasons];

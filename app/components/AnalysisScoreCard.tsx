@@ -48,6 +48,8 @@ export default function AnalysisScoreCard({ analysis }: { analysis: Comprehensiv
           </details>
         ))}
       </div>
+      {analysis.marketRegime && <div className="analysis-warning"><strong>Market Regime: {analysis.marketRegime.label}</strong>{analysis.marketRegime.score === null ? ' · score belum tersedia' : ` · ${analysis.marketRegime.score}/100`} · Return IHSG 20D {analysis.marketRegime.features.return20d === null ? 'belum tersedia' : `${analysis.marketRegime.features.return20d}%`}</div>}
+      {analysis.relativeStrength && <div className="analysis-warning"><strong>Relative Strength: {analysis.relativeStrength.label}</strong> · RS IHSG 5D/20D {analysis.relativeStrength.rs5d === null ? 'belum tersedia' : `${analysis.relativeStrength.rs5d}%`} / {analysis.relativeStrength.rs20d === null ? 'belum tersedia' : `${analysis.relativeStrength.rs20d}%`}</div>}
       {analysis.warnings.map((warning) => <p className="analysis-warning" key={warning}>{warning}</p>)}
       <p className="analysis-disclaimer">Skor adalah alat bantu berbasis data, bukan rekomendasi membeli atau menjual.</p>
     </section>

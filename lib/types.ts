@@ -207,6 +207,11 @@ export interface ComprehensiveAnalysis {
   generatedAt: string;
   components: AnalysisComponent[];
   warnings: string[];
+  /** Absent on snapshots created before the regime/RS model. */
+  marketRegime?: MarketRegimeAnalysis;
+  relativeStrength?: RelativeStrengthAnalysis;
+  exceptionalStrength?: ExceptionalStrengthCheck;
+  gateResult?: MarketGateAudit;
 }
 
 export type DecisionVerdict = 'buy_now' | 'wait_for_pullback' | 'watch' | 'avoid' | 'insufficient_data';
@@ -258,15 +263,37 @@ export type TrendSignal = 'early_uptrend' | 'confirmed_uptrend' | 'watch' | 'avo
 export type MarketRegimeLabel = 'bullish' | 'neutral' | 'bearish' | 'unavailable';
 export type RelativeStrengthLabel = 'strong' | 'moderate' | 'weak' | 'unavailable';
 
+export interface ExceptionalStrengthCheckItem {
+  key: string;
+  passed: boolean;
+  actualValue: number | boolean | null;
+  requiredValue: number | boolean | string;
+  explanation: string;
+}
+
+export interface ExceptionalStrengthCheck {
+  passed: boolean;
+  checks: ExceptionalStrengthCheckItem[];
+}
+
 export interface MarketRegimeAnalysis {
+  /** `label` is retained for persisted v5 snapshots. */
   label: MarketRegimeLabel;
+  regime?: MarketRegimeLabel;
   score: number | null;
+  confidence?: number;
+  completeness?: number;
   reasons: string[];
+  warnings?: string[];
+  observedAt?: string | null;
+  methodologyVersion?: string;
   dataCompleteness: number;
   features: { sessions: number; latestClose: number | null; return5d: number | null; return20d: number | null; sma20: number | null; priceVsSma20: number | null; sma20Trend: number | null; relativeVolume: number | null };
+  metrics?: { return5d: number | null; return20d: number | null; distanceFromSma20: number | null; sma20Slope: number | null; relativeVolume: number | null };
 }
 
 export interface RelativeStrengthAnalysis {
+  /** Flattened fields are retained for persisted v5 snapshots and existing UI. */
   label: RelativeStrengthLabel;
   rs5d: number | null;
   rs20d: number | null;
@@ -279,6 +306,16 @@ export interface RelativeStrengthAnalysis {
   sectorReturn5d: number | null;
   sectorReturn20d: number | null;
   dataCompleteness: number;
+  versusMarket?: { rs5d: number | null; rs20d: number | null; label: RelativeStrengthLabel };
+  versusSector?: { rs5d: number | null; rs20d: number | null; label: RelativeStrengthLabel; benchmarkSymbol: string | null };
+  combinedLabel?: RelativeStrengthLabel;
+  score?: number | null;
+  completeness?: number;
+  reasons?: string[];
+  warnings?: string[];
+  benchmarkSymbol?: string;
+  observedAt?: { stock: string | null; market: string | null; sector: string | null };
+  methodologyVersion?: string;
 }
 
 export interface MarketGateAudit {
@@ -286,10 +323,14 @@ export interface MarketGateAudit {
   signalBeforeGate: TrendSignal;
   signalAfterGate: TrendSignal;
   exceptionalStrength: boolean;
+  exceptionalStrengthCheck: ExceptionalStrengthCheck;
+  gateAction: 'none' | 'retain_exceptional' | 'downgrade' | 'block_unavailable';
+  gateReasons: string[];
   reason: string;
   confidenceAdjustment: number;
   confidenceBefore: number | null;
   confidenceAfter: number | null;
+  riskFlags: string[];
 }
 
 export interface RankingReason {

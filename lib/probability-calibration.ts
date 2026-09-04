@@ -1,65 +1,36 @@
-/** Legacy breadth labels remain accepted so historical v2 cohorts stay readable. */
-export type MarketRegime = 'bull' | 'sideways' | 'bear' | 'bullish' | 'neutral' | 'bearish' | 'unavailable';
+export type MarketRegime = 'bullish' | 'neutral' | 'bearish' | 'unavailable';
+export type OutcomeDefinition = 'net_return_10d_positive' | 'gross_return_10d_positive_legacy' | 'target_before_stop' | 'custom_threshold';
+export type CalibrationSourceLevel = 'exact_regime' | 'neighboring_score_bucket' | 'all_regimes_same_model' | 'insufficient_data';
+export interface CalibrationContext { score: number; modelVersion: string; methodologyVersion: string; calibrationVersion: string; marketRegime: MarketRegime; executionModel: string; outcomeDefinition: OutcomeDefinition; selectionScope: string; analysisDate: string; calibrationCutoff?: string; sector?: string; signal?: string; minimumSampleSize?: number }
+export interface CalibrationObservation { score: number; modelVersion: string; methodologyVersion: string; marketRegime: MarketRegime; executionModel: string; outcomeDefinition: OutcomeDefinition; selectionScope: string; signalDate: string; evaluatedAt: string; netReturn10d: number }
+export interface CalibratedProbability { probability: number | null; rawProbability: number | null; sampleSize: number; successes: number; failures: number; scoreBucket: { low: number; high: number }; requestedRegime: MarketRegime; usedRegime: MarketRegime | 'all'; modelVersion: string; methodologyVersion: string; calibrationVersion: string; executionModel: string; outcomeDefinition: OutcomeDefinition; confidenceInterval: { lower: number | null; upper: number | null; level: number; method: 'wilson' }; prior: { alpha: number; beta: number }; sourceLevel: CalibrationSourceLevel; isFallback: boolean; warnings: string[]; calibrationCutoff: string; latestOutcomeDateUsed: string | null; calculatedAt: string }
 
-export interface CalibrationObservation {
-  score: number;
-  modelVersion: string;
-  marketRegime: MarketRegime;
-  return10d: number;
+export const SCORE_BUCKET_SIZE = 10;
+export const DEFAULT_MINIMUM_SAMPLE_SIZE = 50;
+export const MAX_NEIGHBOR_BUCKET_RADIUS = 2;
+export const BETA_PRIOR = Object.freeze({ alpha: 1, beta: 1 });
+export const INTERVAL_LEVEL = 0.95;
+
+export function scoreBucket(score: number) { if (!Number.isFinite(score) || score < 0 || score > 100) throw new RangeError('score kalibrasi harus berada pada rentang 0–100'); const low = score === 100 ? 90 : Math.floor(score / SCORE_BUCKET_SIZE) * SCORE_BUCKET_SIZE; return { low, high: low === 90 ? 101 : low + SCORE_BUCKET_SIZE }; }
+export function expandScoreBucket(bucket: { low: number; high: number }, radius: number) { if (!Number.isInteger(radius) || radius < 0) throw new RangeError('radius bucket harus integer non-negatif'); return { low: Math.max(0, bucket.low - radius * SCORE_BUCKET_SIZE), high: Math.min(101, bucket.high + radius * SCORE_BUCKET_SIZE) }; }
+export function calculateSmoothedProbability(successes: number, sampleSize: number, prior = BETA_PRIOR) { if (!Number.isInteger(successes) || !Number.isInteger(sampleSize) || successes < 0 || sampleSize < successes) throw new RangeError('jumlah outcome tidak valid'); return (successes + prior.alpha) / (sampleSize + prior.alpha + prior.beta); }
+export function calculateWilsonInterval(successes: number, sampleSize: number, level = INTERVAL_LEVEL) { if (!sampleSize) return { lower: null, upper: null, level, method: 'wilson' as const }; if (successes < 0 || successes > sampleSize) throw new RangeError('jumlah success tidak valid'); const z = 1.959963984540054, p = successes / sampleSize, denominator = 1 + z * z / sampleSize, center = (p + z * z / (2 * sampleSize)) / denominator, margin = z * Math.sqrt((p * (1 - p) + z * z / (4 * sampleSize)) / sampleSize) / denominator; return { lower: Math.max(0, center - margin), upper: Math.min(1, center + margin), level, method: 'wilson' as const }; }
+
+export function calibrateProbability(observations: CalibrationObservation[], context: CalibrationContext, calculatedAt = new Date().toISOString()): CalibratedProbability {
+  const exact = scoreBucket(context.score), cutoff = context.calibrationCutoff ?? calculatedAt, minimum = context.minimumSampleSize ?? DEFAULT_MINIMUM_SAMPLE_SIZE;
+  if (!Number.isInteger(minimum) || minimum < 1) throw new RangeError('minimumSampleSize harus integer positif');
+  const compatible = observations.filter((row) => row.modelVersion === context.modelVersion && row.methodologyVersion === context.methodologyVersion && row.executionModel === context.executionModel && row.outcomeDefinition === context.outcomeDefinition && row.selectionScope === context.selectionScope && Number.isFinite(row.netReturn10d) && row.signalDate < context.analysisDate && row.evaluatedAt <= cutoff);
+  let pool: CalibrationObservation[] = [], usedBucket = exact, sourceLevel: CalibrationSourceLevel = 'insufficient_data';
+  for (let radius = 0; radius <= MAX_NEIGHBOR_BUCKET_RADIUS; radius++) { const range = expandScoreBucket(exact, radius), candidate = compatible.filter((row) => row.marketRegime === context.marketRegime && row.score >= range.low && row.score < range.high); if (candidate.length >= minimum) { pool = candidate; usedBucket = range; sourceLevel = radius === 0 ? 'exact_regime' : 'neighboring_score_bucket'; break; } }
+  if (!pool.length) { const range = expandScoreBucket(exact, MAX_NEIGHBOR_BUCKET_RADIUS), candidate = compatible.filter((row) => row.score >= range.low && row.score < range.high); usedBucket = range; pool = candidate; if (candidate.length >= minimum) sourceLevel = 'all_regimes_same_model'; }
+  const successes = pool.filter((row) => row.netReturn10d > 0).length, sampleSize = pool.length;
+  const warnings = [`selection_scope: Probabilitas outcome pada kandidat ${context.selectionScope}; bukan probabilitas seluruh saham IDX.`];
+  if (sourceLevel === 'neighboring_score_bucket') warnings.push('Sample exact bucket belum mencukupi; rentang skor diperluas secara simetris.');
+  if (sourceLevel === 'all_regimes_same_model') warnings.push(`Sample regime ${context.marketRegime} belum mencukupi; estimasi memakai outcome seluruh regime kompatibel.`);
+  const widest = expandScoreBucket(exact, MAX_NEIGHBOR_BUCKET_RADIUS), compatibleInRange = compatible.filter((row) => row.score >= widest.low && row.score < widest.high).length;
+  if (sourceLevel === 'insufficient_data') warnings.push(`Hanya ${compatibleInRange} dari minimum ${minimum} outcome kompatibel.`);
+  return { probability: sourceLevel !== 'insufficient_data' ? calculateSmoothedProbability(successes, sampleSize) : null, rawProbability: sampleSize ? successes / sampleSize : null, sampleSize, successes, failures: sampleSize - successes, scoreBucket: usedBucket, requestedRegime: context.marketRegime, usedRegime: sourceLevel === 'all_regimes_same_model' ? 'all' : context.marketRegime, modelVersion: context.modelVersion, methodologyVersion: context.methodologyVersion, calibrationVersion: context.calibrationVersion, executionModel: context.executionModel, outcomeDefinition: context.outcomeDefinition, confidenceInterval: calculateWilsonInterval(successes, sampleSize), prior: BETA_PRIOR, sourceLevel, isFallback: sourceLevel !== 'exact_regime', warnings, calibrationCutoff: cutoff, latestOutcomeDateUsed: pool.length ? pool.reduce((latest, row) => row.evaluatedAt > latest ? row.evaluatedAt : latest, pool[0].evaluatedAt) : null, calculatedAt };
 }
 
-export interface CalibratedProbability {
-  probability: number;
-  sampleSize: number;
-  modelVersion: string;
-  marketRegime: MarketRegime;
-  scoreBucket: { low: number; high: number };
-  calibrationVersion: string;
-}
-
-export const CALIBRATION_VERSION = 'net-entered-10d-v2';
-
-export const scoreBucket = (score: number) => {
-  const bounded = Math.min(100, Math.max(0, score));
-  const low = Math.min(90, Math.floor(bounded / 10) * 10);
-  return { low, high: low === 90 ? 101 : low + 10 };
-};
-
-export function calibrateProbability(
-  observations: CalibrationObservation[],
-  score: number,
-  modelVersion: string,
-  marketRegime: MarketRegime,
-  minimumSampleSize = 30,
-): CalibratedProbability | null {
-  const bucket = scoreBucket(score);
-  const cohort = observations.filter((row) =>
-    row.modelVersion === modelVersion
-    && row.marketRegime === marketRegime
-    && row.score >= bucket.low
-    && row.score < bucket.high
-    && Number.isFinite(row.return10d),
-  );
-  if (cohort.length < minimumSampleSize) return null;
-  return {
-    probability: cohort.filter((row) => row.return10d > 0).length / cohort.length,
-    sampleSize: cohort.length,
-    modelVersion,
-    marketRegime,
-    scoreBucket: bucket,
-    calibrationVersion: CALIBRATION_VERSION,
-  };
-}
-
-export function classifyMarketRegime(rows: Array<{ aboveSma20: boolean; return5d: number | null }>): MarketRegime {
-  if (!rows.length) return 'sideways';
-  const aboveSmaBreadth = rows.filter((row) => row.aboveSma20).length / rows.length;
-  const knownMomentum = rows.filter((row): row is { aboveSma20: boolean; return5d: number } => row.return5d !== null && Number.isFinite(row.return5d));
-  const positiveMomentumBreadth = knownMomentum.length
-    ? knownMomentum.filter((row) => row.return5d > 0).length / knownMomentum.length
-    : 0.5;
-  const breadth = (aboveSmaBreadth + positiveMomentumBreadth) / 2;
-  if (breadth >= 0.6) return 'bull';
-  if (breadth <= 0.4) return 'bear';
-  return 'sideways';
-}
+/** Compatibility helper. Legacy bull/sideways/bear observations are intentionally not emitted. */
+export function classifyMarketRegime(rows: Array<{ aboveSma20: boolean; return5d: number | null }>): MarketRegime { if (!rows.length) return 'unavailable'; const above = rows.filter((row) => row.aboveSma20).length / rows.length, known = rows.filter((row) => row.return5d !== null && Number.isFinite(row.return5d)); if (!known.length) return 'unavailable'; const positive = known.filter((row) => Number(row.return5d) > 0).length / known.length, breadth = (above + positive) / 2; return breadth >= 0.6 ? 'bullish' : breadth <= 0.4 ? 'bearish' : 'neutral'; }

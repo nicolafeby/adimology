@@ -314,6 +314,7 @@ export interface StockRanking {
   analysis_quality?: AnalysisQuality | null;
   methodology_version?: string | null;
   model_probability: number | null;
+  probability_calibration?: import('./probability-calibration').CalibratedProbability | null;
   signal: TrendSignal;
   last_price: number;
   reasons: RankingReason[];

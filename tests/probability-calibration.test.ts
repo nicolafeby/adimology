@@ -1,32 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calibrateProbability, classifyMarketRegime, scoreBucket, type CalibrationObservation } from '../lib/probability-calibration';
-
-test('score bucket keeps score 100 inside the final bucket', () => {
-  assert.deepEqual(scoreBucket(100), { low: 90, high: 101 });
-});
-
-test('calibration isolates model version, regime, and score bucket', () => {
-  const wanted = Array.from({ length: 30 }, (_, index): CalibrationObservation => ({
-    score: 75, modelVersion: 'v2', marketRegime: 'bull', return10d: index < 18 ? 2 : -1,
-  }));
-  const noise: CalibrationObservation[] = [
-    ...Array.from({ length: 20 }, (): CalibrationObservation => ({ score: 75, modelVersion: 'v1', marketRegime: 'bull', return10d: -5 })),
-    ...Array.from({ length: 20 }, (): CalibrationObservation => ({ score: 75, modelVersion: 'v2', marketRegime: 'bear', return10d: -5 })),
-    ...Array.from({ length: 20 }, (): CalibrationObservation => ({ score: 65, modelVersion: 'v2', marketRegime: 'bull', return10d: -5 })),
-  ];
-  const result = calibrateProbability([...wanted, ...noise], 72, 'v2', 'bull');
-  assert.equal(result?.sampleSize, 30);
-  assert.equal(result?.probability, 0.6);
-});
-
-test('calibration returns null for an undersized cohort', () => {
-  const rows = Array.from({ length: 29 }, (): CalibrationObservation => ({ score: 50, modelVersion: 'v2', marketRegime: 'sideways', return10d: 1 }));
-  assert.equal(calibrateProbability(rows, 55, 'v2', 'sideways'), null);
-});
-
-test('market regime uses price and momentum breadth', () => {
-  assert.equal(classifyMarketRegime(Array.from({ length: 10 }, (_, index) => ({ aboveSma20: index < 7, return5d: index < 6 ? 1 : -1 }))), 'bull');
-  assert.equal(classifyMarketRegime(Array.from({ length: 10 }, (_, index) => ({ aboveSma20: index < 3, return5d: index < 4 ? 1 : -1 }))), 'bear');
-  assert.equal(classifyMarketRegime(Array.from({ length: 10 }, (_, index) => ({ aboveSma20: index < 5, return5d: index < 5 ? 1 : -1 }))), 'sideways');
-});
+import { calculateSmoothedProbability, calculateWilsonInterval, calibrateProbability, classifyMarketRegime, expandScoreBucket, scoreBucket, type CalibrationContext, type CalibrationObservation } from '../lib/probability-calibration';
+const context: CalibrationContext = { score: 75, modelVersion: 'v2', methodologyVersion: 'm2', calibrationVersion: 'c2', marketRegime: 'bullish', executionModel: 'entry_zone_conservative', outcomeDefinition: 'net_return_10d_positive', selectionScope: 'quantitative_evaluated', analysisDate: '2026-06-01', calibrationCutoff: '2026-06-01T08:00:00Z', minimumSampleSize: 5 };
+const observation = (overrides: Partial<CalibrationObservation> = {}): CalibrationObservation => ({ score: 75, modelVersion: 'v2', methodologyVersion: 'm2', marketRegime: 'bullish', executionModel: 'entry_zone_conservative', outcomeDefinition: 'net_return_10d_positive', selectionScope: 'quantitative_evaluated', signalDate: '2026-04-01', evaluatedAt: '2026-05-01T00:00:00Z', netReturn10d: 1, ...overrides });
+test('score buckets have safe boundaries and include 100', () => { assert.deepEqual(scoreBucket(70), { low: 70, high: 80 }); assert.deepEqual(scoreBucket(79), { low: 70, high: 80 }); assert.deepEqual(scoreBucket(100), { low: 90, high: 101 }); assert.throws(() => scoreBucket(-1)); assert.deepEqual(expandScoreBucket({ low: 70, high: 80 }, 2), { low: 50, high: 100 }); });
+test('exact calibration filters compatibility and future outcomes', () => { const wanted = [1, 1, 1, -1, -1].map((netReturn10d) => observation({ netReturn10d })); const noise = [observation({ modelVersion: 'v1', netReturn10d: -1 }), observation({ methodologyVersion: 'm1', netReturn10d: -1 }), observation({ executionModel: 'legacy_close', netReturn10d: -1 }), observation({ outcomeDefinition: 'gross_return_10d_positive_legacy', netReturn10d: -1 }), observation({ selectionScope: 'ai_validated_top_candidates', netReturn10d: -1 }), observation({ marketRegime: 'neutral', netReturn10d: -1 }), observation({ signalDate: '2026-06-01', netReturn10d: -1 }), observation({ evaluatedAt: '2026-06-02T00:00:00Z', netReturn10d: -1 })]; const result = calibrateProbability([...wanted, ...noise], context); assert.equal(result.sourceLevel, 'exact_regime'); assert.equal(result.sampleSize, 5); assert.equal(result.rawProbability, 0.6); assert.equal(result.probability, 4 / 7); });
+test('fallback expands symmetrically then labels all-regime use', () => { const neighbors = [55, 65, 75, 85, 95].map((score) => observation({ score })); const expanded = calibrateProbability(neighbors, context); assert.equal(expanded.sourceLevel, 'neighboring_score_bucket'); assert.deepEqual(expanded.scoreBucket, { low: 50, high: 100 }); const regimes = [1, 2, 3, 4, 5].map((score) => observation({ score: 75, marketRegime: score % 2 ? 'bearish' : 'neutral' })); const all = calibrateProbability(regimes, context); assert.equal(all.sourceLevel, 'all_regimes_same_model'); assert.equal(all.usedRegime, 'all'); assert.equal(all.isFallback, true); });
+test('insufficient data returns structured null with the observed sample count', () => { const result = calibrateProbability([observation()], context); assert.equal(result.sourceLevel, 'insufficient_data'); assert.equal(result.probability, null); assert.equal(result.sampleSize, 1); });
+test('Laplace smoothing and Wilson interval are bounded', () => { assert.equal(calculateSmoothedProbability(0, 5), 1 / 7); assert.equal(calculateSmoothedProbability(5, 5), 6 / 7); const small = calculateWilsonInterval(3, 5), large = calculateWilsonInterval(60, 100); assert.ok(small.lower! >= 0 && small.upper! <= 1); assert.ok((small.upper! - small.lower!) > (large.upper! - large.lower!)); });
+test('unavailable regime is not neutral', () => { assert.equal(classifyMarketRegime([]), 'unavailable'); assert.equal(classifyMarketRegime(Array.from({ length: 10 }, (_, index) => ({ aboveSma20: index < 5, return5d: index < 5 ? 1 : -1 }))), 'neutral'); });

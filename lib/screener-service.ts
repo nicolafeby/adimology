@@ -2,7 +2,7 @@ import { formatMarketDate } from './date';
 import { classifyTrendWithMarketGate, preScreenHistory, rankingScore } from './ranking';
 import { analyzeSymbol } from './stock-analysis-service';
 import { fetchHistoricalSummary } from './stockbit';
-import { bootstrapIdxUniverseFromCache, createAgentStory, createMatchingAlertEvents, ensureDefaultAlertRule, getActiveIdxUniverse, getAgentStoryByEmiten, getCalibratedProbability, saveIdxUniverse, saveSignalSnapshots, saveStockQueriesForRanking, saveStockRankings, updateAgentStory } from './supabase';
+import { bootstrapIdxUniverseFromCache, createAgentStory, createMatchingAlertEvents, ensureDefaultAlertRule, getActiveIdxUniverse, getAgentStoryByEmiten, saveIdxUniverse, saveSignalSnapshots, saveStockQueriesForRanking, saveStockRankings, updateAgentStory } from './supabase';
 import type { StockRanking } from './types';
 import { evaluateMatureSignals } from './outcome-service';
 import { fetchIdxListedCompanies } from './idx';
@@ -10,6 +10,8 @@ import { generateAiStory } from './ai-story-service';
 import { calculateMarketRegime } from './market-regime';
 import { RANKING_MODEL_VERSION } from './model-version';
 import { calculateTradingDecision } from './decision';
+import { getCalibratedProbability } from './calibration-service';
+import { ACTIVE_EXECUTION_MODEL, ACTIVE_OUTCOME_DEFINITION, ACTIVE_REGIME_METHODOLOGY_VERSION, ACTIVE_SELECTION_SCOPE, buildCalibrationContext } from './model-versions';
 
 const MODEL_VERSION = RANKING_MODEL_VERSION;
 
@@ -32,6 +34,7 @@ export interface ScreenerProgress {
   preScreened: number;
   candidates: number;
   analyzed: number;
+  quantitativeSnapshots: number;
   aiRequested: number;
   aiCompleted: number;
   aiReused: number;
@@ -82,7 +85,7 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
   const candidates = [...passed, ...preScreened.filter((item) => !passedSymbols.has(item.company.symbol))].slice(0, candidateLimit);
   const deepResults = await mapConcurrent(candidates, Math.min(options.concurrency ?? 4, 4), async ({ company }) => {
     const result = await analyzeSymbol(company.symbol, analysisDate, { marketHistory });
-    const calibrated = await getCalibratedProbability(result.analysis.score, MODEL_VERSION, marketRegime.label);
+    const calibrated = await getCalibratedProbability(buildCalibrationContext({ score: result.analysis.score, marketRegime: marketRegime.label, analysisDate, methodologyVersion: result.analysis.methodologyVersion }));
     const classification = classifyTrendWithMarketGate(result.analysis, result.marketRegime, result.relativeStrength);
     return { result, calibrated, classification };
   });
@@ -94,6 +97,20 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     const { result, calibrated, classification } = item.value;
     return [{ result, calibrated, classification, sortScore: rankingScore(result.analysis, calibrated?.probability ?? null) }];
   }).sort((a, b) => b.sortScore - a.sortScore);
+  const buildDecision = ({ result, classification }: (typeof quantitativeCandidates)[number]) => {
+    const metricNumber = (key: string) => { const value = result.analysis.components.flatMap((component) => component.metrics).find((item) => item.key === key)?.value; return typeof value === 'number' && Number.isFinite(value) ? value : null; };
+    const componentScore = (key: string) => result.analysis.components.find((component) => component.key === key)?.score ?? null;
+    const bestBid = result.orderbook.bid.reduce<number | null>((best, level) => level.price > 0 && (best === null || level.price > best) ? level.price : best, null);
+    const bestOffer = result.orderbook.offer.reduce<number | null>((best, level) => level.price > 0 && (best === null || level.price < best) ? level.price : best, null);
+    return calculateTradingDecision({ currentPrice: result.lastPrice, bestBid, bestOffer, targetRealistic: result.targets.targetRealistis1, targetMaximum: result.targets.targetMax, ara: result.ara, atrPercent: metricNumber('atr'), priceVsSma20Percent: metricNumber('sma20'), relativeVolume: metricNumber('volumeRatio'), liquidityScore: componentScore('liquidity'), brokerFlowScore: componentScore('brokerFlow'), signal: classification.signal, marketRegime: result.marketRegime.label, marketGateBlocked: classification.gate.signalBeforeGate !== 'avoid' && classification.gate.signalAfterGate === 'avoid', hardRiskFlags: classification.signal === 'avoid' ? classification.riskFlags : [], confidence: classification.gate.confidenceAfter ?? result.analysis.confidence, dataCompleteness: result.analysis.dataCompleteness, generatedAt: result.analysis.generatedAt, orderbookGeneratedAt: result.analysis.generatedAt, aiStoryGeneratedAt: result.catalyst?.created_at ?? null });
+  };
+  const preScreenPassedBySymbol = new Map(candidates.map(({ company, pre }) => [company.symbol, pre.passed]));
+  const quantitativeSnapshots = await saveSignalSnapshots(quantitativeCandidates.map((candidate) => {
+    const { result, calibrated, classification } = candidate;
+    const decision = buildDecision(candidate);
+    const preScreenPassed = preScreenPassedBySymbol.get(result.symbol) ?? false;
+    return { signal_date: analysisDate, symbol: result.symbol, score: result.analysis.score, data_completeness: result.analysis.dataCompleteness, signal: classification.signal, entry_price: decision.entry.reference ?? result.lastPrice, target_price: decision.targets.target1, stop_price: decision.stop.price, signal_agreement: result.analysis.quality?.agreement.score ?? null, confidence: result.analysis.quality?.confidence ?? null, dominant_direction: result.analysis.quality?.dominantDirection ?? null, methodology_version: result.analysis.methodologyVersion, market_regime: marketRegime.label, market_regime_score: marketRegime.score, regime_methodology_version: ACTIVE_REGIME_METHODOLOGY_VERSION, benchmark_observed_at: marketHistory.at(-1)?.date ?? null, execution_model: ACTIVE_EXECUTION_MODEL, outcome_definition: ACTIVE_OUTCOME_DEFINITION, selection_scope: ACTIVE_SELECTION_SCOPE, selection_stage: 'quantitative_evaluated', selection_reason: preScreenPassed ? 'passed_pre_screen' : 'top_quantitative_fallback', pre_screen_passed: preScreenPassed, feature_snapshot: { analysis_quality: result.analysis.quality ?? null, components: result.analysis.components, source_timestamps: result.analysis.quality?.freshness.sources ?? null, sector: result.sector ?? null, market_regime: marketRegime.label, market_regime_score: marketRegime.score, regime_methodology_version: ACTIVE_REGIME_METHODOLOGY_VERSION, benchmark_observed_at: marketHistory.at(-1)?.date ?? null, relative_strength: result.relativeStrength, gate: classification.gate, decision, selection_scope: ACTIVE_SELECTION_SCOPE, selection_stage: 'quantitative_evaluated', selection_reason: preScreenPassed ? 'passed_pre_screen' : 'top_quantitative_fallback', pre_screen_passed: preScreenPassed, execution_spread_percent: (() => { const bid = Math.max(...result.orderbook.bid.map((x) => x.price), 0); const offer = Math.min(...result.orderbook.offer.map((x) => x.price)); const mid = (bid + offer) / 2; return bid > 0 && Number.isFinite(offer) && mid > 0 ? (offer - bid) / mid * 100 : null; })(), raw_features: { stock_history: result.history, market_history: marketHistory }, model_probability: calibrated.probability, probability_calibration: calibrated }, model_version: MODEL_VERSION };
+  }));
   const aiCandidates = quantitativeCandidates.slice(0, Math.max(1, options.aiLimit ?? 10));
   let aiReused = 0;
   const aiResults = await mapConcurrent(aiCandidates, 2, async ({ result }) => {
@@ -129,7 +146,7 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
   // included in the comprehensive score and can change the final ordering.
   const rescoredResults = await mapConcurrent(aiCandidates.filter(({ result }) => aiValidatedSymbols.has(result.symbol)), Math.min(options.concurrency ?? 4, 4), async ({ result: previous }) => {
     const result = await analyzeSymbol(previous.symbol, analysisDate, { marketHistory });
-    const calibrated = await getCalibratedProbability(result.analysis.score, MODEL_VERSION, marketRegime.label);
+    const calibrated = await getCalibratedProbability(buildCalibrationContext({ score: result.analysis.score, marketRegime: marketRegime.label, analysisDate, methodologyVersion: result.analysis.methodologyVersion }));
     const classification = classifyTrendWithMarketGate(result.analysis, result.marketRegime, result.relativeStrength);
     return { result, calibrated, classification, sortScore: rankingScore(result.analysis, calibrated?.probability ?? null) };
   });
@@ -143,11 +160,7 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
   if (!eligible.length) throw new Error('Tidak ada kandidat AI yang berhasil dihitung ulang; snapshot sebelumnya dipertahankan.');
   const rankingRows: StockRanking[] = eligible.map(({ result, calibrated, classification }, index) => {
     const marketContext = { regime: result.marketRegime, relativeStrength: result.relativeStrength, gate: classification.gate };
-    const metricNumber = (key: string) => { const value = result.analysis.components.flatMap((component) => component.metrics).find((item) => item.key === key)?.value; return typeof value === 'number' && Number.isFinite(value) ? value : null; };
-    const componentScore = (key: string) => result.analysis.components.find((component) => component.key === key)?.score ?? null;
-    const bestBid = result.orderbook.bid.reduce<number | null>((best, level) => level.price > 0 && (best === null || level.price > best) ? level.price : best, null);
-    const bestOffer = result.orderbook.offer.reduce<number | null>((best, level) => level.price > 0 && (best === null || level.price < best) ? level.price : best, null);
-    const decision = calculateTradingDecision({ currentPrice: result.lastPrice, bestBid, bestOffer, targetRealistic: result.targets.targetRealistis1, targetMaximum: result.targets.targetMax, ara: result.ara, atrPercent: metricNumber('atr'), priceVsSma20Percent: metricNumber('sma20'), relativeVolume: metricNumber('volumeRatio'), liquidityScore: componentScore('liquidity'), brokerFlowScore: componentScore('brokerFlow'), signal: classification.signal, marketRegime: result.marketRegime.label, marketGateBlocked: classification.gate.signalBeforeGate !== 'avoid' && classification.gate.signalAfterGate === 'avoid', hardRiskFlags: classification.signal === 'avoid' ? classification.riskFlags : [], confidence: classification.gate.confidenceAfter ?? result.analysis.confidence, dataCompleteness: result.analysis.dataCompleteness, generatedAt: result.analysis.generatedAt, orderbookGeneratedAt: result.analysis.generatedAt, aiStoryGeneratedAt: result.catalyst?.created_at ?? null });
+    const decision = buildDecision({ result, calibrated, classification, sortScore: rankingScore(result.analysis, calibrated.probability) });
     return {
     analysis_date: analysisDate,
     symbol: result.symbol,
@@ -163,6 +176,7 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     analysis_quality: result.analysis.quality ?? null,
     methodology_version: result.analysis.methodologyVersion ?? null,
     model_probability: calibrated?.probability ?? null,
+    probability_calibration: calibrated,
     signal: classification.signal,
     last_price: result.lastPrice,
     reasons: [
@@ -180,23 +194,6 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
   };
   });
   const saved = await saveStockRankings(rankingRows as unknown as Array<Record<string, unknown>>);
-  const decisionBySymbol = new Map(rankingRows.map((row) => [row.symbol, row.decision]));
-  await saveSignalSnapshots(eligible.map(({ result, calibrated, classification }) => ({
-    signal_date: analysisDate,
-    symbol: result.symbol,
-    score: result.analysis.score,
-    data_completeness: result.analysis.dataCompleteness,
-    signal: classification.signal,
-    entry_price: decisionBySymbol.get(result.symbol)?.entry.reference ?? result.lastPrice,
-    target_price: decisionBySymbol.get(result.symbol)?.targets.target1 ?? null,
-    stop_price: decisionBySymbol.get(result.symbol)?.stop.price ?? null,
-    signal_agreement: result.analysis.quality?.agreement.score ?? null,
-    confidence: result.analysis.quality?.confidence ?? null,
-    dominant_direction: result.analysis.quality?.dominantDirection ?? null,
-    methodology_version: result.analysis.methodologyVersion ?? null,
-    feature_snapshot: { analysis_quality: result.analysis.quality ?? null, components: result.analysis.components, source_timestamps: result.analysis.quality?.freshness.sources ?? null, sector: result.sector ?? null, market_regime: marketRegime.label, market_regime_analysis: result.marketRegime, relative_strength: result.relativeStrength, gate: classification.gate, decision: decisionBySymbol.get(result.symbol) ?? null, execution_spread_percent: (() => { const bid = Math.max(...result.orderbook.bid.map((x) => x.price), 0); const offer = Math.min(...result.orderbook.offer.map((x) => x.price)); const mid = (bid + offer) / 2; return bid > 0 && Number.isFinite(offer) && mid > 0 ? (offer - bid) / mid * 100 : null; })(), raw_features: { stock_history: result.history, market_history: marketHistory }, model_probability: calibrated?.probability ?? null, probability_sample_size: calibrated?.sampleSize ?? 0, probability_calibration_version: calibrated?.calibrationVersion ?? null },
-    model_version: MODEL_VERSION,
-  })));
   await saveStockQueriesForRanking(eligible.map(({ result }) => result), analysisDate);
   const alerts = await createMatchingAlertEvents(saved);
   return {
@@ -207,6 +204,6 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     universeSource,
     marketRegime,
     outcomeEvaluation,
-    progress: { universe: universe.length, preScreened: preResults.filter((row) => row.status === 'fulfilled').length, candidates: candidates.length, analyzed: deepResults.filter((row) => row.status === 'fulfilled').length, aiRequested: aiCandidates.length, aiCompleted: aiValidatedSymbols.size, aiReused, errors } satisfies ScreenerProgress,
+    progress: { universe: universe.length, preScreened: preResults.filter((row) => row.status === 'fulfilled').length, candidates: candidates.length, analyzed: deepResults.filter((row) => row.status === 'fulfilled').length, quantitativeSnapshots: quantitativeSnapshots.length, aiRequested: aiCandidates.length, aiCompleted: aiValidatedSymbols.size, aiReused, errors } satisfies ScreenerProgress,
   };
 }

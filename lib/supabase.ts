@@ -1,7 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 import type { IdxListedCompany } from './idx';
 import { decryptSecret, encryptSecret, isSensitiveSessionKey } from './secret-storage';
-import { calibrateProbability, scoreBucket, type CalibratedProbability, type MarketRegime } from './probability-calibration';
+import type { CalibrationContext, CalibrationObservation, CalibratedProbability } from './probability-calibration';
+import { ALERT_CALIBRATION_POLICY } from './model-versions';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -1237,7 +1238,8 @@ export async function getPendingSignalSnapshots(limit = 100, configVersion = 'le
 }
 
 export async function saveSignalOutcome(row: Record<string, unknown>) {
-  const { data, error } = await getSupabaseAdmin().from('signal_outcomes').upsert(row, { onConflict: 'snapshot_id,backtest_config_version' }).select().single();
+  const outcomeDefinition = row.outcome_definition ?? (row.execution_model === 'entry_zone_conservative' ? 'net_return_10d_positive' : 'gross_return_10d_positive_legacy');
+  const { data, error } = await getSupabaseAdmin().from('signal_outcomes').upsert({ ...row, outcome_definition: outcomeDefinition }, { onConflict: 'snapshot_id,backtest_config_version' }).select().single();
   if (error) throw error;
   return data;
 }
@@ -1257,25 +1259,25 @@ export async function getBacktestRows(modelVersion?: string) {
   }).filter((row) => !modelVersion || row.snapshot?.model_version === modelVersion);
 }
 
-export async function getCalibratedProbability(score: number, modelVersion: string, marketRegime: MarketRegime): Promise<CalibratedProbability | null> {
+export async function getCalibrationObservations(context: CalibrationContext): Promise<CalibrationObservation[]> {
   const db = getSupabaseAdmin();
-  const { low, high } = scoreBucket(score);
-  const { data, error } = await db.from('signal_snapshots').select('id, score, model_version, feature_snapshot').eq('model_version', modelVersion).gte('score', low).lt('score', high);
-  if (error || !data?.length) return null;
-  const matchingSnapshots = data.filter((row) => row.feature_snapshot?.market_regime === marketRegime);
-  if (!matchingSnapshots.length) return null;
-  const snapshotMap = new Map(matchingSnapshots.map((row) => [row.id, row]));
-  const { data: outcomes, error: outcomeError } = await db.from('signal_outcomes').select('snapshot_id, net_return_percent, entry_triggered, is_ambiguous, exit_reason').in('snapshot_id', [...snapshotMap.keys()]).eq('entry_triggered', true).eq('is_ambiguous', false).not('net_return_percent', 'is', null);
-  if (outcomeError || !outcomes) return null;
-  return calibrateProbability(outcomes.flatMap((outcome) => {
+  const { data, error } = await db.from('signal_snapshots').select('id, signal_date, score, model_version, methodology_version, market_regime, feature_snapshot, execution_model, outcome_definition, selection_scope').eq('model_version', context.modelVersion).eq('methodology_version', context.methodologyVersion).eq('execution_model', context.executionModel).eq('outcome_definition', context.outcomeDefinition).eq('selection_scope', context.selectionScope).lt('signal_date', context.analysisDate);
+  if (error) throw error;
+  if (!data?.length) return [];
+  const snapshotMap = new Map(data.map((row) => [row.id, row]));
+  const { data: outcomes, error: outcomeError } = await db.from('signal_outcomes').select('snapshot_id, net_return_percent, entry_triggered, is_ambiguous, exit_reason, execution_model, outcome_definition, evaluated_at').in('snapshot_id', [...snapshotMap.keys()]).eq('execution_model', context.executionModel).eq('outcome_definition', context.outcomeDefinition).eq('entry_triggered', true).eq('is_ambiguous', false).lte('evaluated_at', context.calibrationCutoff ?? new Date().toISOString()).not('net_return_percent', 'is', null);
+  if (outcomeError) throw outcomeError;
+  return (outcomes ?? []).flatMap((outcome) => {
     const snapshot = snapshotMap.get(outcome.snapshot_id);
     if (!snapshot) return [];
     if (['no_entry', 'insufficient_data', 'ambiguous'].includes(String(outcome.exit_reason))) return [];
-    return [{ score: Number(snapshot.score), modelVersion: String(snapshot.model_version), marketRegime, return10d: Number(outcome.net_return_percent) }];
-  }), score, modelVersion, marketRegime);
+    const regime = snapshot.market_regime ?? snapshot.feature_snapshot?.market_regime ?? 'unavailable';
+    if (!['bullish', 'neutral', 'bearish', 'unavailable'].includes(regime)) return [];
+    return [{ score: Number(snapshot.score), modelVersion: String(snapshot.model_version), methodologyVersion: String(snapshot.methodology_version), marketRegime: regime, executionModel: String(outcome.execution_model), outcomeDefinition: outcome.outcome_definition, selectionScope: String(snapshot.selection_scope), signalDate: String(snapshot.signal_date), evaluatedAt: String(outcome.evaluated_at), netReturn10d: Number(outcome.net_return_percent) } as CalibrationObservation];
+  });
 }
 
-export async function createMatchingAlertEvents(rankings: Array<{ id?: number; symbol: string; score: number; data_completeness: number; model_probability: number | null; signal: string }>) {
+export async function createMatchingAlertEvents(rankings: Array<{ id?: number; symbol: string; score: number; data_completeness: number; model_probability: number | null; probability_calibration?: CalibratedProbability | null; signal: string }>) {
   const db = getSupabaseAdmin();
   const { data: rules, error } = await db.from('alert_rules').select('*').eq('enabled', true);
   if (error) throw error;
@@ -1284,7 +1286,8 @@ export async function createMatchingAlertEvents(rankings: Array<{ id?: number; s
     for (const ranking of rankings) {
       const allowed = rule.allowed_signals ?? ['confirmed_uptrend'];
       if (ranking.score < Number(rule.minimum_score ?? 70) || ranking.data_completeness < Number(rule.minimum_completeness ?? 75) || !allowed.includes(ranking.signal)) continue;
-      if (ranking.model_probability === null || ranking.model_probability < Number(rule.minimum_probability ?? 0.6)) continue;
+      const calibration = ranking.probability_calibration;
+      if (ranking.model_probability === null || !calibration || calibration.sourceLevel === 'insufficient_data' || calibration.sampleSize < ALERT_CALIBRATION_POLICY.minimumSampleSize || calibration.confidenceInterval.lower === null || ranking.model_probability < Number(rule.minimum_probability ?? 0.6) || calibration.confidenceInterval.lower < ALERT_CALIBRATION_POLICY.minimumIntervalLowerBound) continue;
       const cooldownStart = new Date(Date.now() - Number(rule.cooldown_hours ?? 24) * 3600000).toISOString();
       const { count } = await db.from('alert_events').select('*', { count: 'exact', head: true }).eq('rule_id', rule.id).eq('symbol', ranking.symbol).gte('created_at', cooldownStart);
       if (count) continue;

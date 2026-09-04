@@ -14,7 +14,10 @@ export interface CalibratedProbability {
   modelVersion: string;
   marketRegime: MarketRegime;
   scoreBucket: { low: number; high: number };
+  calibrationVersion: string;
 }
+
+export const CALIBRATION_VERSION = 'net-entered-10d-v2';
 
 export const scoreBucket = (score: number) => {
   const bounded = Math.min(100, Math.max(0, score));
@@ -44,6 +47,7 @@ export function calibrateProbability(
     modelVersion,
     marketRegime,
     scoreBucket: bucket,
+    calibrationVersion: CALIBRATION_VERSION,
   };
 }
 

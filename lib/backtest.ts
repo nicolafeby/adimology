@@ -1,77 +1,83 @@
+import { getFraksi } from './calculations';
 import type { BacktestSummary } from './types';
 
-export interface BacktestCostOptions {
-  buyFeePercent?: number;
-  sellFeePercent?: number;
-  slippagePercentPerSide?: number;
-}
-
-// Conservative defaults for an IDX retail trade. All values are percentages.
-export const DEFAULT_BACKTEST_COSTS = {
-  buyFeePercent: 0.15,
-  sellFeePercent: 0.25,
-  slippagePercentPerSide: 0.1,
-} as const;
-
+export type SlippageModel = 'none' | 'fixed_percent' | 'half_spread' | 'configurable_spread_fraction';
+export type SameBarPolicy = 'mark_ambiguous' | 'conservative_stop_first' | 'optimistic_target_first';
+export type ExitReason = 'target_1' | 'target_2' | 'stop' | 'time_exit' | 'ambiguous' | 'no_entry' | 'insufficient_data';
+export interface BacktestConfig { buyFeePercent: number; sellFeePercent: number; minimumFee: number; slippageModel: SlippageModel; fixedSlippagePercent: number; spreadFraction: number; conservativeSameBarPolicy: SameBarPolicy; lotSize: number; holdingPeriods: number[]; initialEquity: number; configVersion: string }
+export const DEFAULT_BACKTEST_CONFIG: Readonly<BacktestConfig> = Object.freeze({ buyFeePercent: 0.15, sellFeePercent: 0.25, minimumFee: 0, slippageModel: 'fixed_percent', fixedSlippagePercent: 0.1, spreadFraction: 0.5, conservativeSameBarPolicy: 'mark_ambiguous', lotSize: 100, holdingPeriods: [5, 10, 20], initialEquity: 100, configVersion: 'idx-backtest-v2' });
+/** @deprecated Compatibility for the original public API. */
+export interface BacktestCostOptions { buyFeePercent?: number; sellFeePercent?: number; slippagePercentPerSide?: number }
+export const DEFAULT_BACKTEST_COSTS = { buyFeePercent: 0.15, sellFeePercent: 0.25, slippagePercentPerSide: 0.1 } as const;
+const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const mean = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
-const rate = (values: Array<boolean | null>) => {
-  const known = values.filter((value): value is boolean => value !== null);
-  return known.length ? known.filter(Boolean).length / known.length : null;
-};
+const median = (values: number[]) => { if (!values.length) return null; const sorted = [...values].sort((a, b) => a - b); const mid = Math.floor(sorted.length / 2); return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2; };
 
-const finiteNonNegative = (value: number | undefined, fallback: number) =>
-  typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
-
-export function netReturnPercent(grossReturnPercent: number, options: BacktestCostOptions = {}): number {
-  const buyFee = finiteNonNegative(options.buyFeePercent, DEFAULT_BACKTEST_COSTS.buyFeePercent) / 100;
-  const sellFee = finiteNonNegative(options.sellFeePercent, DEFAULT_BACKTEST_COSTS.sellFeePercent) / 100;
-  const slippage = finiteNonNegative(options.slippagePercentPerSide, DEFAULT_BACKTEST_COSTS.slippagePercentPerSide) / 100;
-  if (buyFee === 0 && sellFee === 0 && slippage === 0) return grossReturnPercent;
-  // Entry is paid above the reference price; exit is received below it.
-  return (((1 + grossReturnPercent / 100) * (1 - slippage) * (1 - sellFee)) / ((1 + slippage) * (1 + buyFee)) - 1) * 100;
+export function validateBacktestConfig(config: BacktestConfig): BacktestConfig {
+  for (const [key, value] of Object.entries({ buyFeePercent: config.buyFeePercent, sellFeePercent: config.sellFeePercent, fixedSlippagePercent: config.fixedSlippagePercent })) if (!finite(value) || value < 0 || value > 10) throw new Error(`${key} harus berupa persentase 0–10`);
+  if (!finite(config.minimumFee) || config.minimumFee < 0) throw new Error('minimumFee tidak boleh negatif');
+  if (!finite(config.spreadFraction) || config.spreadFraction < 0 || config.spreadFraction > 1) throw new Error('spreadFraction harus berada pada rentang 0–1');
+  if (!Number.isInteger(config.lotSize) || config.lotSize <= 0) throw new Error('lotSize harus integer positif');
+  if (!config.holdingPeriods.length || config.holdingPeriods.some((x) => !Number.isInteger(x) || x <= 0)) throw new Error('holdingPeriods harus berisi integer positif');
+  if (!finite(config.initialEquity) || config.initialEquity <= 0) throw new Error('initialEquity harus positif');
+  if (!config.configVersion.trim()) throw new Error('configVersion wajib diisi');
+  return config;
+}
+export function loadBacktestConfig(env: Record<string, string | undefined> = process.env): BacktestConfig {
+  const number = (key: string, fallback: number) => env[key] === undefined || env[key] === '' ? fallback : Number(env[key]);
+  return validateBacktestConfig({ ...DEFAULT_BACKTEST_CONFIG, buyFeePercent: number('BACKTEST_BUY_FEE_PERCENT', DEFAULT_BACKTEST_CONFIG.buyFeePercent), sellFeePercent: number('BACKTEST_SELL_FEE_PERCENT', DEFAULT_BACKTEST_CONFIG.sellFeePercent), minimumFee: number('BACKTEST_MINIMUM_FEE', DEFAULT_BACKTEST_CONFIG.minimumFee), fixedSlippagePercent: number('BACKTEST_FIXED_SLIPPAGE_PERCENT', DEFAULT_BACKTEST_CONFIG.fixedSlippagePercent), spreadFraction: number('BACKTEST_SPREAD_FRACTION', DEFAULT_BACKTEST_CONFIG.spreadFraction), lotSize: number('BACKTEST_LOT_SIZE', DEFAULT_BACKTEST_CONFIG.lotSize), configVersion: env.BACKTEST_CONFIG_VERSION || DEFAULT_BACKTEST_CONFIG.configVersion });
+}
+export function roundIdxPrice(price: number, side: 'buy' | 'sell') { if (!finite(price) || price <= 0) throw new Error('Harga harus positif'); const tick = getFraksi(price); return (side === 'buy' ? Math.ceil(price / tick) : Math.floor(price / tick)) * tick; }
+export function resolveSlippage(config: BacktestConfig, spreadPercent?: number | null) {
+  if (config.slippageModel === 'none') return { percent: 0, source: 'none' as const };
+  if ((config.slippageModel === 'half_spread' || config.slippageModel === 'configurable_spread_fraction') && finite(spreadPercent) && spreadPercent >= 0) return { percent: spreadPercent * (config.slippageModel === 'half_spread' ? 0.5 : config.spreadFraction), source: 'snapshot_spread' as const };
+  return { percent: config.fixedSlippagePercent, source: config.slippageModel === 'fixed_percent' ? 'configured_fixed' as const : 'configured_fallback' as const };
+}
+export function applySlippage(rawPrice: number, side: 'buy' | 'sell', percent: number) { return roundIdxPrice(rawPrice * (side === 'buy' ? 1 + percent / 100 : 1 - percent / 100), side); }
+export function applyExecutionCost(input: { executedEntryPrice: number; executedExitPrice: number; shares: number }, config: BacktestConfig) {
+  validateBacktestConfig(config); if (![input.executedEntryPrice, input.executedExitPrice, input.shares].every((x) => finite(x) && x > 0)) throw new Error('Harga eksekusi dan shares harus positif');
+  const grossEntryValue = input.executedEntryPrice * input.shares, grossExitValue = input.executedExitPrice * input.shares;
+  const buyFee = Math.max(config.minimumFee, grossEntryValue * config.buyFeePercent / 100), sellFee = Math.max(config.minimumFee, grossExitValue * config.sellFeePercent / 100);
+  const grossPnl = grossExitValue - grossEntryValue, netPnl = grossPnl - buyFee - sellFee;
+  return { grossEntryValue, grossExitValue, buyFee, sellFee, grossPnl, netPnl, grossReturnPercent: grossPnl / grossEntryValue * 100, netReturnPercent: netPnl / (grossEntryValue + buyFee) * 100 };
 }
 
-const maximumDrawdown = (returns: number[]) => {
-  if (!returns.length) return null;
-  let equity = 1;
-  let peak = 1;
-  let worst = 0;
-  for (const value of returns) {
-    equity *= Math.max(0, 1 + value / 100);
-    peak = Math.max(peak, equity);
-    worst = Math.max(worst, (peak - equity) / peak);
-  }
-  return worst * 100;
-};
+export interface BacktestCandle { date: string; open: number; high: number; low: number; close: number }
+export interface TradeSetup { signalDate: string; entryLow: number; entryHigh: number; stopPrice: number; target1: number; target2?: number | null; validSessions: number; horizon: number; shares?: number | null; lots?: number | null; spreadPercent?: number | null }
+export interface TradeOutcome { entryTriggered: boolean; entryDate: string | null; rawEntryPrice: number | null; executedEntryPrice: number | null; rawExitPrice: number | null; executedExitPrice: number | null; exitDate: string | null; exitReason: ExitReason; targetHit: boolean; stopHit: boolean; isAmbiguous: boolean; ambiguityReason: string | null; holdingSessions: number | null; calculationBasis: 'actual_shares' | 'actual_lots' | 'one_lot'; shares: number; entrySlippagePercent: number | null; exitSlippagePercent: number | null; slippageSource: string | null; buyFee: number | null; sellFee: number | null; grossPnl: number | null; netPnl: number | null; grossReturnPercent: number | null; netReturnPercent: number | null; initialRisk: number | null; rMultiple: number | null; mfe: number | null; mae: number | null; mfePercent: number | null; maePercent: number | null; mfeR: number | null; maeR: number | null }
+export function normalizeCandles(rows: BacktestCandle[]) { const byDate = new Map<string, BacktestCandle>(); for (const row of rows) if (row.date && [row.open, row.high, row.low, row.close].every(finite)) byDate.set(row.date, row); return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)); }
+export function calculateTradeOutcome(candles: BacktestCandle[], setup: TradeSetup, config: BacktestConfig): TradeOutcome {
+  validateBacktestConfig(config); const rows = normalizeCandles(candles).filter((row) => row.date > setup.signalDate);
+  const calculationBasis = setup.shares && setup.shares > 0 ? 'actual_shares' : setup.lots && setup.lots > 0 ? 'actual_lots' : 'one_lot'; const shares = calculationBasis === 'actual_shares' ? setup.shares! : calculationBasis === 'actual_lots' ? setup.lots! * config.lotSize : config.lotSize;
+  const empty = (exitReason: ExitReason): TradeOutcome => ({ entryTriggered: false, entryDate: null, rawEntryPrice: null, executedEntryPrice: null, rawExitPrice: null, executedExitPrice: null, exitDate: null, exitReason, targetHit: false, stopHit: false, isAmbiguous: false, ambiguityReason: null, holdingSessions: null, calculationBasis, shares, entrySlippagePercent: null, exitSlippagePercent: null, slippageSource: null, buyFee: null, sellFee: null, grossPnl: null, netPnl: null, grossReturnPercent: null, netReturnPercent: null, initialRisk: null, rMultiple: null, mfe: null, mae: null, mfePercent: null, maePercent: null, mfeR: null, maeR: null });
+  if (rows.length < setup.horizon) return empty('insufficient_data'); const entryIndex = rows.slice(0, setup.validSessions).findIndex((row) => row.low <= setup.entryHigh && row.high >= setup.entryLow); if (entryIndex < 0) return empty('no_entry');
+  const candle = rows[entryIndex], rawEntryPrice = Math.max(setup.entryLow, Math.min(setup.entryHigh, candle.open)); const slippage = resolveSlippage(config, setup.spreadPercent), executedEntryPrice = applySlippage(rawEntryPrice, 'buy', slippage.percent), active = rows.slice(entryIndex, entryIndex + setup.horizon);
+  let exitReason: ExitReason = 'time_exit', exitIndex = active.length - 1, rawExitPrice = active.at(-1)!.close, targetHit = false, stopHit = false, ambiguityReason: string | null = null;
+  for (let i = 0; i < active.length; i++) { const target = active[i].high >= setup.target1, stop = active[i].low <= setup.stopPrice; if (!target && !stop) continue; targetHit = target; stopHit = stop; exitIndex = i; if (target && stop) { ambiguityReason = i === 0 ? 'entry_target_stop_order_unknown' : 'target_stop_order_unknown'; if (config.conservativeSameBarPolicy === 'mark_ambiguous') { exitReason = 'ambiguous'; rawExitPrice = setup.stopPrice; } else if (config.conservativeSameBarPolicy === 'conservative_stop_first') { exitReason = 'stop'; rawExitPrice = setup.stopPrice; } else { exitReason = 'target_1'; rawExitPrice = setup.target1; } } else if (stop) { exitReason = 'stop'; rawExitPrice = setup.stopPrice; } else { exitReason = 'target_1'; rawExitPrice = setup.target1; } break; }
+  const observed = active.slice(0, exitIndex + 1), executedExitPrice = applySlippage(rawExitPrice, 'sell', slippage.percent), costs = applyExecutionCost({ executedEntryPrice, executedExitPrice, shares }, config), mfePrice = Math.max(...observed.map((x) => x.high)), maePrice = Math.min(...observed.map((x) => x.low)), initialRisk = executedEntryPrice > setup.stopPrice ? executedEntryPrice - setup.stopPrice : null;
+  return { entryTriggered: true, entryDate: active[0].date, rawEntryPrice, executedEntryPrice, rawExitPrice, executedExitPrice, exitDate: active[exitIndex].date, exitReason, targetHit, stopHit, isAmbiguous: exitReason === 'ambiguous', ambiguityReason, holdingSessions: exitIndex + 1, calculationBasis, shares, entrySlippagePercent: slippage.percent, exitSlippagePercent: slippage.percent, slippageSource: slippage.source, ...costs, initialRisk, rMultiple: initialRisk ? costs.netPnl / shares / initialRisk : null, mfe: mfePrice - executedEntryPrice, mae: maePrice - executedEntryPrice, mfePercent: (mfePrice / executedEntryPrice - 1) * 100, maePercent: (maePrice / executedEntryPrice - 1) * 100, mfeR: initialRisk ? (mfePrice - executedEntryPrice) / initialRisk : null, maeR: initialRisk ? (maePrice - executedEntryPrice) / initialRisk : null };
+}
+export function buildEquityCurve(trades: Array<{ exitDate: string; netReturnPercent: number }>, initialEquity = 100) { let equity = initialEquity, peak = initialEquity; return [...trades].sort((a, b) => a.exitDate.localeCompare(b.exitDate)).map((trade) => { equity *= 1 + trade.netReturnPercent / 100; peak = Math.max(peak, equity); return { date: trade.exitDate, equity, peak, drawdownPercent: peak > 0 ? (equity / peak - 1) * 100 : null }; }); }
+export function calculateMaximumDrawdown(curve: ReturnType<typeof buildEquityCurve>) { return curve.length ? Math.min(...curve.map((x) => x.drawdownPercent ?? 0)) : null; }
+export function netReturnPercent(grossReturnPercent: number, options: BacktestCostOptions = {}) { const buy = (options.buyFeePercent ?? DEFAULT_BACKTEST_COSTS.buyFeePercent) / 100, sell = (options.sellFeePercent ?? DEFAULT_BACKTEST_COSTS.sellFeePercent) / 100, slip = (options.slippagePercentPerSide ?? DEFAULT_BACKTEST_COSTS.slippagePercentPerSide) / 100; if (![buy, sell, slip].every((x) => finite(x) && x >= 0 && x <= 0.1)) throw new Error('Konfigurasi biaya tidak valid'); if (buy === 0 && sell === 0 && slip === 0) return grossReturnPercent; return (((1 + grossReturnPercent / 100) * (1 - slip) * (1 - sell)) / ((1 + slip) * (1 + buy)) - 1) * 100; }
+export function summarizeBacktest(rows: Array<Record<string, unknown>>, options: BacktestCostOptions | BacktestConfig = {}): BacktestSummary {
+  const config = 'configVersion' in options ? validateBacktestConfig(options) : validateBacktestConfig({ ...DEFAULT_BACKTEST_CONFIG, buyFeePercent: options.buyFeePercent ?? DEFAULT_BACKTEST_CONFIG.buyFeePercent, sellFeePercent: options.sellFeePercent ?? DEFAULT_BACKTEST_CONFIG.sellFeePercent, fixedSlippagePercent: options.slippagePercentPerSide ?? DEFAULT_BACKTEST_CONFIG.fixedSlippagePercent });
+  const rowNet = (r: Record<string, unknown>) => finite(r.net_return_percent) ? r.net_return_percent : finite(r.net_return) ? r.net_return : finite(r.return_10d) ? netReturnPercent(r.return_10d, { buyFeePercent: config.buyFeePercent, sellFeePercent: config.sellFeePercent, slippagePercentPerSide: config.fixedSlippagePercent }) : null;
+  const entered = rows.filter((r) => r.entry_triggered === true || (r.entry_triggered == null && finite(r.return_10d))), eligible = entered.filter((r) => !['ambiguous', 'insufficient_data', 'no_entry'].includes(String(r.exit_reason ?? r.outcome_status ?? ''))), netReturns = eligible.flatMap((r) => { const value = rowNet(r); return value === null ? [] : [value]; }), wins = netReturns.filter((x) => x > 0), losses = netReturns.filter((x) => x < 0), rValues = eligible.flatMap((r) => finite(r.r_multiple) ? [r.r_multiple] : []), gross = eligible.flatMap((r) => finite(r.gross_return_percent) ? [r.gross_return_percent] : finite(r.return_10d) ? [r.return_10d] : []), maes = entered.flatMap((r) => finite(r.mae_percent) ? [r.mae_percent] : finite(r.maximum_adverse_excursion) ? [r.maximum_adverse_excursion] : []), mfes = entered.flatMap((r) => finite(r.mfe_percent) ? [r.mfe_percent] : finite(r.maximum_favorable_excursion) ? [r.maximum_favorable_excursion] : []), closed = eligible.flatMap((r) => { const value = rowNet(r); return value !== null && (r.exit_date || r.evaluated_at || r.signal_date) ? [{ exitDate: String(r.exit_date ?? r.evaluated_at ?? r.signal_date), netReturnPercent: value }] : []; }), noEntryCount = rows.filter((r) => r.entry_triggered === false && ['no_entry', 'expired_no_entry'].includes(String(r.exit_reason ?? r.outcome_status))).length, ambiguousCount = rows.filter((r) => r.is_ambiguous === true || r.exit_reason === 'ambiguous' || r.outcome_status === 'ambiguous').length;
+  const drawdown = calculateMaximumDrawdown(buildEquityCurve(closed, config.initialEquity));
+  return { sampleSize: rows.length, eligibleSignals: eligible.length, enteredTrades: entered.length, noEntryCount, pendingCount: rows.filter((r) => ['insufficient_data', 'open'].includes(String(r.exit_reason ?? r.outcome_status))).length, ambiguousCount, wins: wins.length, losses: losses.length, breakEven: netReturns.filter((x) => x === 0).length, winRate5d: null, winRate10d: wins.length + losses.length ? wins.length / (wins.length + losses.length) : null, winRate20d: null, lossRate: wins.length + losses.length ? losses.length / (wins.length + losses.length) : null, averageReturn10d: mean(netReturns), grossAverageReturn10d: mean(gross), expectancy10d: mean(netReturns), expectancyR: mean(rValues), averageR: mean(rValues), medianR: median(rValues), averageWin: mean(wins), averageLoss: mean(losses), payoffRatio: wins.length && losses.length ? mean(wins)! / Math.abs(mean(losses)!) : null, profitFactor: losses.length ? wins.reduce((a, b) => a + b, 0) / Math.abs(losses.reduce((a, b) => a + b, 0)) : null, maxDrawdown10d: drawdown === null ? null : Math.abs(drawdown), drawdownMethod: 'sequential_indexed_approximation', averageMae: mean(maes), worstMae: maes.length ? Math.min(...maes) : null, averageMfe: mean(mfes), averageHoldingPeriod: mean(entered.flatMap((r) => finite(r.holding_sessions ?? r.holding_period) ? [Number(r.holding_sessions ?? r.holding_period)] : [])), noEntryRate: rows.length ? noEntryCount / rows.length : null, costAssumptions: { buyFeePercent: config.buyFeePercent, sellFeePercent: config.sellFeePercent, minimumFee: config.minimumFee, slippageModel: config.slippageModel, slippagePercentPerSide: config.fixedSlippagePercent }, configVersion: config.configVersion, executionModels: [...new Set(rows.map((r) => String(r.execution_model ?? 'legacy_close')))], targetHitRate: entered.length ? entered.filter((r) => r.target_hit === true).length / entered.length : null, stopHitRate: entered.length ? entered.filter((r) => r.stop_hit === true).length / entered.length : null, brierScore: null, metricSampleSizes: { netReturn: netReturns.length, rMultiple: rValues.length, drawdown: closed.length, excursions: maes.length } };
+}
 
-export function summarizeBacktest(rows: Array<Record<string, unknown>>, options: BacktestCostOptions = {}): BacktestSummary {
-  const numeric = (key: string) => rows.map((row) => row[key]).filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
-  const costs = {
-    buyFeePercent: finiteNonNegative(options.buyFeePercent, DEFAULT_BACKTEST_COSTS.buyFeePercent),
-    sellFeePercent: finiteNonNegative(options.sellFeePercent, DEFAULT_BACKTEST_COSTS.sellFeePercent),
-    slippagePercentPerSide: finiteNonNegative(options.slippagePercentPerSide, DEFAULT_BACKTEST_COSTS.slippagePercentPerSide),
+export function segmentBacktest(rows: Array<Record<string, unknown>>, config: BacktestConfig) {
+  const dimensions: Record<string, (row: Record<string, unknown>) => string> = {
+    modelVersion: (r) => String((r.snapshot as { model_version?: unknown } | undefined)?.model_version ?? 'unknown'),
+    configVersion: (r) => String(r.backtest_config_version ?? 'legacy'),
+    executionModel: (r) => String(r.execution_model ?? 'legacy_close'),
+    signal: (r) => String((r.snapshot as { signal?: unknown } | undefined)?.signal ?? 'unknown'),
+    scoreBucket: (r) => { const score = Number((r.snapshot as { score?: unknown } | undefined)?.score); return Number.isFinite(score) ? `${Math.floor(score / 10) * 10}-${Math.floor(score / 10) * 10 + 9}` : 'unknown'; },
+    marketRegime: (r) => String((r.snapshot as { feature_snapshot?: { market_regime?: unknown } } | undefined)?.feature_snapshot?.market_regime ?? 'unknown'),
+    sector: (r) => String((r.snapshot as { feature_snapshot?: { sector?: unknown } } | undefined)?.feature_snapshot?.sector ?? 'unknown'),
+    period: (r) => String(r.signal_date ?? '').slice(0, 7) || 'unknown',
   };
-  const withNetReturn = (key: string) => numeric(key).map((value) => netReturnPercent(value, costs));
-  const net5d = withNetReturn('return_5d');
-  const net10d = withNetReturn('return_10d');
-  const net20d = withNetReturn('return_20d');
-  const chronologicalNet10d = rows
-    .filter((row) => typeof row.return_10d === 'number' && Number.isFinite(row.return_10d))
-    .sort((a, b) => String(a.signal_date ?? a.evaluated_at ?? '').localeCompare(String(b.signal_date ?? b.evaluated_at ?? '')))
-    .map((row) => netReturnPercent(Number(row.return_10d), costs));
-  const probabilityRows = rows.filter((row) => typeof row.model_probability === 'number' && typeof row.return_10d === 'number');
-  return {
-    sampleSize: rows.length,
-    winRate5d: rate(net5d.map((value) => value > 0)),
-    winRate10d: rate(net10d.map((value) => value > 0)),
-    winRate20d: rate(net20d.map((value) => value > 0)),
-    averageReturn10d: mean(net10d),
-    grossAverageReturn10d: mean(numeric('return_10d')),
-    expectancy10d: mean(net10d),
-    maxDrawdown10d: maximumDrawdown(chronologicalNet10d),
-    costAssumptions: costs,
-    targetHitRate: rate(rows.map((row) => typeof row.target_hit === 'boolean' ? row.target_hit : null)),
-    stopHitRate: rate(rows.map((row) => typeof row.stop_hit === 'boolean' ? row.stop_hit : null)),
-    brierScore: probabilityRows.length ? mean(probabilityRows.map((row) => Math.pow(Number(row.model_probability) - (netReturnPercent(Number(row.return_10d), costs) > 0 ? 1 : 0), 2))) : null,
-  };
+  return Object.fromEntries(Object.entries(dimensions).map(([name, select]) => { const groups = new Map<string, Array<Record<string, unknown>>>(); for (const row of rows) { const key = select(row); groups.set(key, [...(groups.get(key) ?? []), row]); } return [name, [...groups.entries()].map(([key, cohort]) => ({ key, summary: summarizeBacktest(cohort, config) }))]; }));
 }

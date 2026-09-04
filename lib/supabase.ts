@@ -1225,9 +1225,9 @@ export async function saveSignalSnapshots(rows: Array<Record<string, unknown>>) 
   return data ?? [];
 }
 
-export async function getPendingSignalSnapshots(limit = 100) {
+export async function getPendingSignalSnapshots(limit = 100, configVersion = 'legacy-v1') {
   const db = getSupabaseAdmin();
-  const { data: evaluated } = await db.from('signal_outcomes').select('snapshot_id');
+  const { data: evaluated } = await db.from('signal_outcomes').select('snapshot_id').eq('backtest_config_version', configVersion);
   const ids = (evaluated ?? []).map((row) => row.snapshot_id);
   let query = db.from('signal_snapshots').select('*').lte('signal_date', new Date(Date.now() - 28 * 86400000).toISOString().slice(0, 10)).limit(limit);
   if (ids.length) query = query.not('id', 'in', `(${ids.join(',')})`);
@@ -1237,7 +1237,7 @@ export async function getPendingSignalSnapshots(limit = 100) {
 }
 
 export async function saveSignalOutcome(row: Record<string, unknown>) {
-  const { data, error } = await getSupabaseAdmin().from('signal_outcomes').upsert(row, { onConflict: 'snapshot_id' }).select().single();
+  const { data, error } = await getSupabaseAdmin().from('signal_outcomes').upsert(row, { onConflict: 'snapshot_id,backtest_config_version' }).select().single();
   if (error) throw error;
   return data;
 }
@@ -1265,12 +1265,13 @@ export async function getCalibratedProbability(score: number, modelVersion: stri
   const matchingSnapshots = data.filter((row) => row.feature_snapshot?.market_regime === marketRegime);
   if (!matchingSnapshots.length) return null;
   const snapshotMap = new Map(matchingSnapshots.map((row) => [row.id, row]));
-  const { data: outcomes, error: outcomeError } = await db.from('signal_outcomes').select('snapshot_id, return_10d').in('snapshot_id', [...snapshotMap.keys()]).not('return_10d', 'is', null);
+  const { data: outcomes, error: outcomeError } = await db.from('signal_outcomes').select('snapshot_id, net_return_percent, entry_triggered, is_ambiguous, exit_reason').in('snapshot_id', [...snapshotMap.keys()]).eq('entry_triggered', true).eq('is_ambiguous', false).not('net_return_percent', 'is', null);
   if (outcomeError || !outcomes) return null;
   return calibrateProbability(outcomes.flatMap((outcome) => {
     const snapshot = snapshotMap.get(outcome.snapshot_id);
     if (!snapshot) return [];
-    return [{ score: Number(snapshot.score), modelVersion: String(snapshot.model_version), marketRegime, return10d: Number(outcome.return_10d) }];
+    if (['no_entry', 'insufficient_data', 'ambiguous'].includes(String(outcome.exit_reason))) return [];
+    return [{ score: Number(snapshot.score), modelVersion: String(snapshot.model_version), marketRegime, return10d: Number(outcome.net_return_percent) }];
   }), score, modelVersion, marketRegime);
 }
 

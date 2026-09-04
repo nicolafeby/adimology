@@ -255,21 +255,48 @@ export interface StockRanking {
 
 export interface BacktestSummary {
   sampleSize: number;
+  eligibleSignals: number;
+  enteredTrades: number;
+  noEntryCount: number;
+  pendingCount: number;
+  ambiguousCount: number;
+  wins: number;
+  losses: number;
+  breakEven: number;
   winRate5d: number | null;
   winRate10d: number | null;
   winRate20d: number | null;
   averageReturn10d: number | null;
   grossAverageReturn10d: number | null;
   expectancy10d: number | null;
+  expectancyR: number | null;
+  averageR: number | null;
+  medianR: number | null;
+  averageWin: number | null;
+  averageLoss: number | null;
+  lossRate: number | null;
+  payoffRatio: number | null;
+  profitFactor: number | null;
   maxDrawdown10d: number | null;
+  drawdownMethod: 'sequential_indexed_approximation' | 'portfolio_aware';
+  averageMae: number | null;
+  worstMae: number | null;
+  averageMfe: number | null;
+  averageHoldingPeriod: number | null;
+  noEntryRate: number | null;
   costAssumptions: {
     buyFeePercent: number;
     sellFeePercent: number;
+    minimumFee: number;
+    slippageModel: string;
     slippagePercentPerSide: number;
   };
+  configVersion: string;
+  executionModels: string[];
   targetHitRate: number | null;
   stopHitRate: number | null;
   brierScore: number | null;
+  metricSampleSizes: { netReturn: number; rMultiple: number; drawdown: number; excursions: number };
 }
 
 export interface CalculatedData {

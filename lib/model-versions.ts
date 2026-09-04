@@ -2,6 +2,23 @@ import { ANALYSIS_QUALITY_VERSION } from './analysis-quality';
 import { DEFAULT_BACKTEST_CONFIG } from './backtest';
 import type { CalibrationContext, MarketRegime } from './probability-calibration';
 export const ACTIVE_MODEL_VERSION = 'multifactor-regime-rs-v6';
+const LEGACY_RANKING_MODEL_VERSIONS = [
+  'multifactor-ai-v2',
+  'multifactor-regime-rs-v3',
+  'multifactor-decision-v4',
+  'multifactor-quality-v5',
+] as const;
+
+export function isSupportedRankingModelVersion(value: unknown): value is string {
+  return typeof value === 'string'
+    && (value === ACTIVE_MODEL_VERSION || LEGACY_RANKING_MODEL_VERSIONS.includes(value as (typeof LEGACY_RANKING_MODEL_VERSIONS)[number]));
+}
+
+export function rankingModelBadge(value: unknown) {
+  if (!isSupportedRankingModelVersion(value)) return null;
+  const version = value.match(/v\d+$/)?.[0];
+  return version ? `Regime + RS · ${version}` : 'AI validated';
+}
 export const ACTIVE_METHODOLOGY_VERSION = ANALYSIS_QUALITY_VERSION;
 export const ACTIVE_CALIBRATION_VERSION = 'probability-net-10d-v3';
 export const ACTIVE_EXECUTION_MODEL = 'entry_zone_conservative';

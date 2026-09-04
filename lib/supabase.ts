@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import type { IdxListedCompany } from './idx';
 import { decryptSecret, encryptSecret, isSensitiveSessionKey } from './secret-storage';
 import type { CalibrationContext, CalibrationObservation, CalibratedProbability } from './probability-calibration';
-import { ALERT_CALIBRATION_POLICY } from './model-versions';
+import { ALERT_CALIBRATION_POLICY, isSupportedRankingModelVersion } from './model-versions';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -1196,7 +1196,7 @@ export async function getStockRankings(date?: string, limit = 10) {
   const uniqueRanks = new Map<number, (typeof data)[number]>();
   for (const row of data ?? []) {
     const reasons = Array.isArray(row.reasons) ? row.reasons : [];
-    const isAiV2 = reasons.some((reason: { label?: string; value?: string }) => reason.label === 'Scoring Model' && ['multifactor-ai-v2', 'multifactor-regime-rs-v3', 'multifactor-decision-v4', 'multifactor-quality-v5'].includes(reason.value ?? ''))
+    const isAiV2 = reasons.some((reason: { label?: string; value?: string }) => reason.label === 'Scoring Model' && isSupportedRankingModelVersion(reason.value))
       && reasons.some((reason: { label?: string }) => reason.label === 'AI Story');
     if (isAiV2 && !uniqueRanks.has(Number(row.rank))) uniqueRanks.set(Number(row.rank), hydrateRankingMarketContext(row));
   }

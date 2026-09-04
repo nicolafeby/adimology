@@ -2,7 +2,7 @@ import { formatMarketDate } from './date';
 import { calculateRankingScore, classifyTrendWithMarketGate, diagnosticPriorityScore, preScreenHistory, RANKING_MODEL_CONFIG } from './ranking';
 import { analyzeSymbol } from './stock-analysis-service';
 import { fetchHistoricalSummary } from './stockbit';
-import { bootstrapIdxUniverseFromCache, commitScreeningRun, createAgentStory, createMatchingAlertEvents, ensureDefaultAlertRule, getActiveIdxUniverse, getAgentStoryByEmiten, saveIdxUniverse, saveSignalSnapshots, saveStockQueriesForRanking, saveStockRankings, updateAgentStory, updateScreeningAiEnrichment } from './supabase';
+import { appendScreeningRunEvents, bootstrapIdxUniverseFromCache, claimScreeningRun, createAgentStory, createMatchingAlertEvents, ensureDefaultAlertRule, failPendingScreeningRunItems, getActiveIdxUniverse, getAgentStoryByEmiten, saveIdxUniverse, saveSignalSnapshots, saveStockQueriesForRanking, saveStockRankings, updateAgentStory, updateScreeningAiEnrichment, updateScreeningRun, upsertScreeningRunItems } from './supabase';
 import type { StockRanking } from './types';
 import { evaluateMatureSignals } from './outcome-service';
 import { fetchIdxListedCompanies } from './idx';
@@ -12,6 +12,7 @@ import { calculateTradingDecision } from './decision';
 import { getCalibratedProbability } from './calibration-service';
 import { ACTIVE_ELIGIBILITY_CONFIG_VERSION, ACTIVE_EXECUTION_MODEL, ACTIVE_MODEL_VERSION, ACTIVE_OUTCOME_DEFINITION, ACTIVE_RANKING_MODEL_VERSION, ACTIVE_REGIME_METHODOLOGY_VERSION, ACTIVE_RELATIVE_STRENGTH_METHODOLOGY_VERSION, ACTIVE_SELECTION_SCOPE, buildCalibrationContext } from './model-versions';
 import { evaluateEligibility, groupScreeningResults, SCREENER_ELIGIBILITY_CONFIG, type ScreeningResult, type SelectionStage } from './screening';
+import { deriveFunnelSummary, safeProcessingError, validateFunnelSummary, type ScreeningRunStatus } from './screener-observability';
 
 const MODEL_VERSION = ACTIVE_MODEL_VERSION;
 
@@ -52,10 +53,14 @@ export interface ScreenerProgress {
   errors: Array<{ symbol: string; error: string }>;
 }
 
-export async function runMarketScreener(options: { analysisDate?: string; universeLimit?: number; deepLimit?: number; aiLimit?: number; concurrency?: number } = {}) {
+export async function runMarketScreener(options: { analysisDate?: string; universeLimit?: number; deepLimit?: number; aiLimit?: number; concurrency?: number; triggerSource?: string; requestedBy?: string; idempotencyKey?: string } = {}) {
   const analysisDate = options.analysisDate ?? formatMarketDate();
   const runId = crypto.randomUUID();
   const startedAt = new Date().toISOString();
+  const claimed = await claimScreeningRun({ id: runId, analysis_date: analysisDate, started_at: startedAt, trigger_source: options.triggerSource ?? 'api', requested_by: options.requestedBy ?? null, idempotency_key: options.idempotencyKey ?? null, configuration_version: 'screener-funnel-v1', eligibility_config_version: ACTIVE_ELIGIBILITY_CONFIG_VERSION, ranking_model_version: ACTIVE_RANKING_MODEL_VERSION, methodology_version: MODEL_VERSION });
+  if (claimed.reused) return { reused: true, runId: claimed.id, analysisDate, date: analysisDate, run: { id: claimed.id, analysisDate, status: 'running', quantitativeStatus: 'processing', enrichmentStatus: 'not_started', startedAt, completedAt: null }, summary: null, results: { passed: [], watch: [], rejected: [], processingError: [] }, rankings: [], alertsCreated: 0, progress: { universe: 0, preScreened: 0, candidates: 0, analyzed: 0, quantitativeSnapshots: 0, aiRequested: 0, aiCompleted: 0, aiReused: 0, errors: [] } };
+  try {
+  await appendScreeningRunEvents([{ run_id: runId, symbol: null, stage: 'universe', event_type: 'run_started', status: 'running', metadata: {}, idempotency_key: 'run_started', occurred_at: startedAt }]);
   const outcomeEvaluation = await evaluateMatureSignals(100).catch((error) => ({ pending: 0, evaluated: 0, errors: [{ symbol: '*', error: error instanceof Error ? error.message : String(error) }] }));
   let universeSource: 'idx' | 'database' | 'watchlist-cache' = 'database';
   let bootstrapped = 0;
@@ -72,6 +77,10 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     universe = await getActiveIdxUniverse(options.universeLimit ?? 1000);
   }
   if (!universe.length) throw new Error('Universe kosong. Sinkronkan watchlist Stockbit atau isi tabel idx_universe terlebih dahulu.');
+  const universeAt = new Date().toISOString();
+  await updateScreeningRun(runId, { universe_source: universeSource, universe_size: universe.length, universe_count: universe.length, quantitative_status: 'processing' });
+  await upsertScreeningRunItems(universe.map((company) => ({ run_id: runId, symbol: company.symbol, company_name: company.company_name ?? null, sector: company.sector ?? null, analysis_date: analysisDate, screening_status: null, passed_rules: [], failed_rules: [], selection_stage: 'universe', data_quality: {}, evaluated_at: universeAt, current_stage: 'universe', terminal_status: 'pending', quantitative_status: 'not_started', started_at: universeAt })));
+  await appendScreeningRunEvents([{ run_id: runId, symbol: null, stage: 'universe', event_type: 'universe_loaded', status: 'completed', metadata: { count: universe.length, source: universeSource }, idempotency_key: 'universe_loaded', occurred_at: universeAt }]);
   await ensureDefaultAlertRule();
   const start = new Date(`${analysisDate}T00:00:00Z`);
   start.setUTCDate(start.getUTCDate() - 60);
@@ -206,8 +215,10 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
       signalAgreement: quantitative?.result.analysis.quality?.agreement.score ?? null,
       riskReward: decision?.riskReward.target1 ?? null,
     });
-    const stage: SelectionStage = processError && !pre ? 'universe' : !candidateSymbols.has(company.symbol) || !quantitative ? 'pre_screen' : eligibility.screeningStatus === 'passed' ? 'final_selection' : 'quality_gate';
-    return { symbol: company.symbol, analysis_date: analysisDate, screening_status: eligibility.screeningStatus, eligibility_status: eligibility.status, eligibility_rules: eligibility.rules, passed_rules: eligibility.rules.filter((item) => item.passed), failed_rules: eligibility.rules.filter((item) => !item.passed), selection_stage: stage, data_quality: { completeness, confidence, valid: !processError && Boolean(quantitative) }, evaluated_at: evaluatedAt, run_id: runId, analysis_score: ranking?.analysis_score ?? null, ranking_score: null, ranking_position: null, ranking_factors: [], eligibility_config_version: SCREENER_ELIGIBILITY_CONFIG.version, ranking_model_version: RANKING_MODEL_CONFIG.version, ranking: null, ai_status: 'not_requested', ai_enrichment: null, ai_source: null, ai_requested_at: null, ai_completed_at: null, ai_error: null };
+    const skipped = Boolean(pre && !candidateSymbols.has(company.symbol));
+    const stage: SelectionStage = processError && !pre ? 'universe' : skipped || !quantitative ? 'pre_screen' : eligibility.screeningStatus === 'passed' ? 'final_selection' : 'quality_gate';
+    const safeError = processError ? safeProcessingError(processError, pre ? 'QUANTITATIVE_ANALYSIS_FAILED' : 'HISTORY_FETCH_FAILED', pre ? 'quantitative_analysis' : 'data_acquisition') : null;
+    return { symbol: company.symbol, company_name: company.company_name ?? null, sector: company.sector ?? null, analysis_date: analysisDate, screening_status: skipped ? null : eligibility.screeningStatus, eligibility_status: skipped ? 'not_evaluated' : eligibility.status, eligibility_rules: skipped ? [] : eligibility.rules, passed_rules: skipped ? [] : eligibility.rules.filter((item) => item.passed), failed_rules: skipped ? [] : eligibility.rules.filter((item) => !item.passed), selection_stage: stage, data_quality: { completeness, confidence, valid: !processError && Boolean(quantitative) }, evaluated_at: evaluatedAt, run_id: runId, analysis_score: ranking?.analysis_score ?? null, ranking_score: null, ranking_position: null, ranking_factors: [], eligibility_config_version: SCREENER_ELIGIBILITY_CONFIG.version, ranking_model_version: RANKING_MODEL_CONFIG.version, ranking: null, current_stage: processError ? safeError!.stage : skipped ? 'quantitative_selection' : 'persisted', terminal_status: processError ? 'processing_error' : skipped ? 'skipped' : !pre?.passed ? 'filtered_out' : 'completed', pre_screen_passed: pre?.passed ?? null, pre_screen_score: pre?.score ?? null, pre_screen_rules: pre ?? {}, selected_for_quantitative: candidateSymbols.has(company.symbol), quantitative_status: skipped ? 'skipped' : processError && pre ? 'failed' : quantitative ? 'completed' : 'not_started', data_completeness: completeness, confidence, selected_for_ai: false, failure_stage: safeError?.stage ?? null, error_code: safeError?.code ?? null, error_message: safeError?.safe_message ?? null, completed_at: evaluatedAt, ai_status: 'not_requested', ai_enrichment: null, ai_source: null, ai_requested_at: null, ai_completed_at: null, ai_error: null } as ScreeningResult & Record<string, unknown>;
   });
   const rankingBySymbol = new Map(rankingRows.map((row) => [row.symbol, row]));
   const passedRows = screeningResults.filter((item) => item.screening_status === 'passed').map((item) => rankingBySymbol.get(item.symbol)!).filter(Boolean).sort((a, b) => (b.ranking_score ?? 0) - (a.ranking_score ?? 0) || (b.confidence ?? 0) - (a.confidence ?? 0) || b.data_completeness - a.data_completeness || (b.components.find((c) => c.key === 'liquidity')?.score ?? 0) - (a.components.find((c) => c.key === 'liquidity')?.score ?? 0) || a.symbol.localeCompare(b.symbol)).map((row, index) => ({ ...row, rank: index + 1, ranking_position: index + 1, eligibility_status: 'eligible' as const }));
@@ -220,9 +231,28 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     .slice(0, aiLimit);
   const requestedAt = new Date().toISOString();
   for (const row of aiCandidates) { row.ai_status = 'pending'; row.ai_requested_at = requestedAt; }
+  for (const row of aiCandidates) Object.assign(row, { selected_for_ai: true, current_stage: 'ai_enrichment' });
+  await upsertScreeningRunItems(screeningResults as unknown as Array<Record<string, unknown>>);
+  await appendScreeningRunEvents(screeningResults.flatMap((row) => {
+    const item = row as ScreeningResult & Record<string, unknown>;
+    const events: Array<Record<string, unknown>> = [];
+    const add = (stage: string, eventType: string, status: string, metadata: Record<string, unknown> = {}) => events.push({ run_id: runId, symbol: row.symbol, stage, event_type: eventType, status, metadata, idempotency_key: `${row.symbol}:${eventType}`, occurred_at: evaluatedAt });
+    if (item.failure_stage === 'data_acquisition') add('data_acquisition', 'data_fetch_failed', 'failed', { error_code: item.error_code });
+    else add('data_acquisition', 'data_fetch_completed', 'completed');
+    if (item.pre_screen_passed === true) add('pre_screen', 'pre_screen_passed', 'completed', { score: item.pre_screen_score });
+    else if (item.pre_screen_passed === false) add('pre_screen', 'pre_screen_failed', 'filtered_out', { score: item.pre_screen_score });
+    if (item.selected_for_quantitative) add('quantitative_selection', 'quantitative_selected', 'completed');
+    else if (item.quantitative_status === 'skipped') add('quantitative_selection', 'quantitative_skipped', 'skipped');
+    if (item.quantitative_status === 'completed') add('quantitative_analysis', 'analysis_completed', 'completed');
+    if (item.quantitative_status === 'failed') add('quantitative_analysis', 'analysis_failed', 'failed', { error_code: item.error_code });
+    if (row.eligibility_status && row.eligibility_status !== 'not_evaluated') add('eligibility', 'eligibility_evaluated', String(row.screening_status), { eligibility_status: row.eligibility_status });
+    if (row.ranking_position != null) add('ranking', 'ranking_assigned', 'completed', { position: row.ranking_position });
+    return events;
+  }));
   // This commit is intentionally before the first AI request: a complete,
   // queryable quantitative snapshot exists even if every provider call fails.
-  await commitScreeningRun({ id: runId, analysis_date: analysisDate, universe_count: universe.length, started_at: startedAt, quantitative_status: errors.length ? 'partial' : 'completed', enrichment_status: aiCandidates.length ? 'processing' : 'not_started' }, screeningResults as unknown as Array<Record<string, unknown>>);
+  await updateScreeningRun(runId, { quantitative_status: errors.length ? 'partial' : 'completed', enrichment_status: aiCandidates.length ? 'processing' : 'not_started' });
+  await appendScreeningRunEvents([{ run_id: runId, symbol: null, stage: 'persisted', event_type: 'results_persisted', status: 'completed', metadata: { count: screeningResults.length }, idempotency_key: 'results_persisted', occurred_at: new Date().toISOString() }]);
 
   let aiReused = 0;
   const aiResults = await mapConcurrent(aiCandidates, 2, async (screeningRow) => {
@@ -256,9 +286,10 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
       errors.push({ symbol: row.symbol, error: `AI Story: ${row.ai_error}` });
     }
   });
+  await upsertScreeningRunItems(aiCandidates as unknown as Array<Record<string, unknown>>).catch((error) => errors.push({ symbol: '*', error: `AI enrichment batch persistence: ${errorMessage(error)}` }));
   await Promise.all(aiCandidates.map((row) => updateScreeningAiEnrichment(runId, row.symbol, { ai_status: row.ai_status, ai_enrichment: row.ai_enrichment, ai_source: row.ai_source, ai_requested_at: row.ai_requested_at, ai_completed_at: row.ai_completed_at, ai_error: row.ai_error }).catch((error) => errors.push({ symbol: row.symbol, error: `AI enrichment persistence: ${error instanceof Error ? error.message : String(error)}` }))));
   const enrichmentStatus = !aiCandidates.length ? 'not_started' : aiCompleted === aiCandidates.length ? 'completed' : aiCompleted ? 'partial' : 'failed';
-  await commitScreeningRun({ id: runId, analysis_date: analysisDate, universe_count: universe.length, started_at: startedAt, quantitative_status: preErrors.size ? 'partial' : 'completed', enrichment_status: enrichmentStatus }, screeningResults as unknown as Array<Record<string, unknown>>)
+  await updateScreeningRun(runId, { quantitative_status: preErrors.size ? 'partial' : 'completed', enrichment_status: enrichmentStatus })
     .catch((error) => errors.push({ symbol: '*', error: `AI enrichment status persistence: ${errorMessage(error)}` }));
   // The atomic screening contract is authoritative. Legacy rankings and related
   // side effects are best-effort compatibility writes after the run is complete.
@@ -272,8 +303,15 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     return [];
   });
   const contract = groupScreeningResults(screeningResults, universe.length);
+  const funnelSummary = deriveFunnelSummary(screeningResults);
+  const reconciliationWarnings = validateFunnelSummary(funnelSummary);
+  const quantitativePartial = errors.some((item) => !item.error.startsWith('AI')) || reconciliationWarnings.length > 0;
+  const finalStatus: ScreeningRunStatus = quantitativePartial ? 'partial' : 'completed';
+  const completedAt = new Date().toISOString();
+  await updateScreeningRun(runId, { status: finalStatus, quantitative_status: quantitativePartial ? 'partial' : 'completed', enrichment_status: enrichmentStatus === 'not_started' ? 'skipped' : enrichmentStatus, completed_at: completedAt, summary: funnelSummary, error_summary: [...errors.map((item) => ({ symbol: item.symbol, ...safeProcessingError(item.error, 'UNKNOWN_PROCESSING_ERROR', item.error.startsWith('AI') ? 'ai_enrichment' : 'quantitative_analysis') })), ...reconciliationWarnings.map((safe_message) => ({ code: 'PERSISTENCE_FAILED', stage: 'persisted', retryable: false, safe_message }))] });
+  await appendScreeningRunEvents([{ run_id: runId, symbol: null, stage: 'completed', event_type: 'run_completed', status: finalStatus, metadata: { warnings: reconciliationWarnings }, idempotency_key: 'run_completed', occurred_at: completedAt }]);
   return {
-    date: analysisDate, analysisDate, runId, quantitativeStatus: errors.some((item) => !item.error.startsWith('AI')) ? 'partial' : 'completed', enrichmentStatus, ...contract,
+    date: analysisDate, analysisDate, runId, run: { id: runId, analysisDate, status: finalStatus, quantitativeStatus: quantitativePartial ? 'partial' : 'completed', enrichmentStatus, startedAt, completedAt }, quantitativeStatus: quantitativePartial ? 'partial' : 'completed', enrichmentStatus, ...contract, summary: funnelSummary,
     rankings: saved,
     alertsCreated: alerts.length,
     bootstrapped,
@@ -282,4 +320,11 @@ export async function runMarketScreener(options: { analysisDate?: string; univer
     outcomeEvaluation,
     progress: { universe: universe.length, preScreened: preResults.filter((row) => row.status === 'fulfilled').length, candidates: candidates.length, analyzed: deepResults.filter((row) => row.status === 'fulfilled').length, quantitativeSnapshots: quantitativeSnapshots.length, aiRequested: aiCandidates.length, aiCompleted, aiReused, errors } satisfies ScreenerProgress,
   };
+  } catch (error) {
+    const safe = safeProcessingError(error, 'UNKNOWN_PROCESSING_ERROR', 'universe');
+    await failPendingScreeningRunItems(runId, safe).catch(() => undefined);
+    await updateScreeningRun(runId, { status: 'failed', quantitative_status: 'failed', enrichment_status: 'skipped', completed_at: new Date().toISOString(), error_summary: [safe] }).catch(() => undefined);
+    await appendScreeningRunEvents([{ run_id: runId, symbol: null, stage: safe.stage, event_type: 'run_failed', status: 'failed', metadata: safe, idempotency_key: 'run_failed', occurred_at: safe.occurred_at }]).catch(() => undefined);
+    throw new Error(safe.safe_message);
+  }
 }

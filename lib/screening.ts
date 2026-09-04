@@ -62,7 +62,7 @@ export function classifyScreening(input: ScreeningClassifierInput) {
 }
 
 export interface ScreeningResult {
-  symbol: string; analysis_date: string; screening_status: ScreeningStatus; eligibility_status?: EligibilityStatus; eligibility_rules?: EligibilityRule[];
+  symbol: string; analysis_date: string; screening_status: ScreeningStatus | null; eligibility_status?: EligibilityStatus; eligibility_rules?: EligibilityRule[];
   passed_rules: EligibilityRule[]; failed_rules: EligibilityRule[]; selection_stage: SelectionStage; data_quality: { completeness: number | null; confidence: number | null; valid: boolean };
   evaluated_at: string; run_id: string; analysis_score?: number | null; ranking_score?: number | null; ranking_position?: number | null;
   ranking_factors?: import('./ranking').RankingFactor[]; eligibility_config_version?: string; ranking_model_version?: string; ranking?: StockRanking | null;

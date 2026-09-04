@@ -13,7 +13,7 @@ export default async () => {
     const aiLimit = Number(process.env.SCREENER_AI_LIMIT || 10);
     const log = await createBackgroundJobLog('analyze-watchlist', universeLimit);
     jobId = log.id;
-    const result = await runMarketScreener({ universeLimit, deepLimit, aiLimit, concurrency: 4 });
+    const result = await runMarketScreener({ universeLimit, deepLimit, aiLimit, concurrency: 4, triggerSource: 'scheduled', idempotencyKey: `scheduled:${new Date().toISOString().slice(0, 10)}` });
     await updateBackgroundJobLog(log.id, { status: 'completed', success_count: result.progress.analyzed, error_count: result.progress.errors.length, metadata: { date: result.date, rankings: result.rankings.length, alerts_created: result.alertsCreated, ...result.progress } });
     return new Response(JSON.stringify({ success: true, ...result }), { status: 200, headers: { 'content-type': 'application/json' } });
   } catch (error) {

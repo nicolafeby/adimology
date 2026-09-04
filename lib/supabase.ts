@@ -1219,6 +1219,66 @@ export async function commitScreeningRun(run: { id: string; analysis_date: strin
   if (error) throw error;
 }
 
+export async function claimScreeningRun(run: Record<string, unknown>): Promise<{ id: string; reused: boolean }> {
+  const { data, error } = await getSupabaseAdmin().rpc('claim_screening_run', { p_run: run });
+  if (error) throw error;
+  return (data?.[0] ?? { id: run.id, reused: false }) as { id: string; reused: boolean };
+}
+
+export async function upsertScreeningRunItems(items: Array<Record<string, unknown>>) {
+  if (!items.length) return;
+  const { error } = await getSupabaseAdmin().from('screening_results').upsert(items, { onConflict: 'run_id,symbol' });
+  if (error) throw error;
+}
+
+export async function appendScreeningRunEvents(events: Array<Record<string, unknown>>) {
+  if (!events.length) return;
+  const { error } = await getSupabaseAdmin().from('screening_run_events').upsert(events, { onConflict: 'run_id,idempotency_key', ignoreDuplicates: true });
+  if (error) throw error;
+}
+
+export async function updateScreeningRun(runId: string, values: Record<string, unknown>) {
+  const { error } = await getSupabaseAdmin().from('screening_runs').update({ ...values, updated_at: new Date().toISOString() }).eq('id', runId);
+  if (error) throw error;
+}
+
+export async function failPendingScreeningRunItems(runId: string, failure: { stage: string; code: string; safe_message: string }) {
+  const now = new Date().toISOString();
+  const { error } = await getSupabaseAdmin().from('screening_results').update({ current_stage: failure.stage, terminal_status: 'processing_error', screening_status: 'processing_error', failure_stage: failure.stage, error_code: failure.code, error_message: failure.safe_message, completed_at: now, updated_at: now }).eq('run_id', runId).eq('terminal_status', 'pending');
+  if (error) throw error;
+}
+
+export async function getScreeningRun(runId: string) {
+  const { data, error } = await getSupabaseAdmin().from('screening_runs').select('*').eq('id', runId).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+export async function getScreeningRunItems(runId: string, filters: { status?: string; stage?: string; preScreenPassed?: boolean; selectedForQuantitative?: boolean; screeningStatus?: string; aiStatus?: string; page?: number; pageSize?: number } = {}) {
+  const pageSize = Math.min(100, Math.max(1, filters.pageSize ?? 50));
+  const from = Math.max(0, (filters.page ?? 1) - 1) * pageSize;
+  let query = getSupabaseAdmin().from('screening_results').select('*', { count: 'exact' }).eq('run_id', runId);
+  if (filters.status) query = query.eq('terminal_status', filters.status);
+  if (filters.stage) query = query.eq('current_stage', filters.stage);
+  if (filters.preScreenPassed !== undefined) query = query.eq('pre_screen_passed', filters.preScreenPassed);
+  if (filters.selectedForQuantitative !== undefined) query = query.eq('selected_for_quantitative', filters.selectedForQuantitative);
+  if (filters.screeningStatus) query = query.eq('screening_status', filters.screeningStatus);
+  if (filters.aiStatus) query = query.eq('ai_status', filters.aiStatus);
+  const { data, error, count } = await query.order('symbol').range(from, from + pageSize - 1);
+  if (error) throw error;
+  return { data: data ?? [], total: count ?? 0, page: filters.page ?? 1, pageSize };
+}
+
+export async function getScreeningSymbolJourney(runId: string, symbol: string) {
+  const db = getSupabaseAdmin();
+  const [{ data: item, error: itemError }, { data: events, error: eventsError }] = await Promise.all([
+    db.from('screening_results').select('*').eq('run_id', runId).eq('symbol', symbol).maybeSingle(),
+    db.from('screening_run_events').select('stage,event_type,status,metadata,occurred_at').eq('run_id', runId).eq('symbol', symbol).order('occurred_at'),
+  ]);
+  if (itemError) throw itemError; if (eventsError) throw eventsError;
+  return item ? { item, events: events ?? [] } : null;
+}
+
 export async function updateScreeningAiEnrichment(runId: string, symbol: string, enrichment: Record<string, unknown>) {
   const { error } = await getSupabaseAdmin().from('screening_results').update(enrichment).eq('run_id', runId).eq('symbol', symbol);
   if (error) throw error;
@@ -1226,7 +1286,7 @@ export async function updateScreeningAiEnrichment(runId: string, symbol: string,
 
 export async function getLatestScreeningRun(date?: string) {
   const db = getSupabaseAdmin();
-  let query = db.from('screening_runs').select('*').eq('status', 'completed');
+  let query = db.from('screening_runs').select('*').in('status', ['completed', 'partial']);
   if (date) query = query.eq('analysis_date', date);
   const { data: run, error } = await query.order('analysis_date', { ascending: false }).order('completed_at', { ascending: false }).limit(1).maybeSingle();
   if (error) {

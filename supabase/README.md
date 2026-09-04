@@ -136,6 +136,12 @@ Pastikan:
 
 ## 📊 Schema Migrations Table
 
+## Retensi funnel Screener
+
+Migration 025 menyimpan satu current-state row per `(run_id, symbol)` dan event transisi ringkas. Event tidak dihapus otomatis. Operator boleh menerapkan retensi minimal 90 hari setelah kebutuhan audit dikonfirmasi; snapshot run/item dan tabel ranking/signal historis tidak ikut dihapus. Menghapus sebuah run akan menghapus item/event-nya melalui foreign key cascade, tetapi tidak menghapus snapshot ranking atau outcome legacy.
+
+Run `running` yang lebih tua dari 120 menit dapat direkonsiliasi secara eksplisit dengan `select mark_stale_screening_runs(120);`. Scheduled maintenance harus memanggil fungsi itu; migration tidak menjalankan job tersembunyi.
+
 Tabel tracking otomatis dibuat dengan struktur:
 
 ```sql

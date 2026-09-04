@@ -17,7 +17,8 @@ const summarizeRunError = (message: string) => message.includes('429') || messag
 
 export default function RankingsPage() {
   const [rankings, setRankings] = useState<StockRanking[]>([]);
-  const [screeningSummary, setScreeningSummary] = useState({ universe: 0, evaluated: 0, passed: 0, watch: 0, rejected: 0, processingError: 0, aiRequested: 0, aiCompleted: 0, aiFailed: 0 });
+  const [screeningSummary, setScreeningSummary] = useState({ universe: 0, dataAcquisitionSucceeded: 0, preScreenPassed: 0, quantitativeCompleted: 0, passed: 0, watch: 0, rejected: 0, processingError: 0, aiRequested: 0, aiCompleted: 0, aiFailed: 0 });
+  const [runMeta, setRunMeta] = useState<Record<string, unknown> | null>(null);
   const [otherResults, setOtherResults] = useState<{ watch: ScreeningResult[]; rejected: ScreeningResult[]; processingError: ScreeningResult[] }>({ watch: [], rejected: [], processingError: [] });
   const [date, setDate] = useState('');
   const [summary, setSummary] = useState<BacktestSummary | null>(null);
@@ -43,7 +44,8 @@ export default function RankingsPage() {
       const universeJson = await universeResponse.json();
       if (!rankingJson.success) throw new Error(rankingJson.error || 'Ranking tidak dapat dimuat');
       setRankings(rankingJson.data ?? []); setDate(rankingJson.analysisDate ?? rankingJson.date ?? '');
-      if (rankingJson.summary) setScreeningSummary(rankingJson.summary);
+      if (rankingJson.summary) setScreeningSummary((current) => ({ ...current, ...rankingJson.summary }));
+      setRunMeta(rankingJson.run ?? null);
       if (rankingJson.results) setOtherResults({ watch: rankingJson.results.watch ?? [], rejected: rankingJson.results.rejected ?? [], processingError: rankingJson.results.processingError ?? [] });
       if (backtestJson.success) setSummary(backtestJson.summary);
       if (alertJson.success) setAlerts(alertJson.data ?? []);
@@ -86,8 +88,9 @@ export default function RankingsPage() {
 
       {error && <div className="ranking-empty ranking-error">{error}</div>}
       {runMessage && <div className="ranking-run-status">{runMessage}</div>}
+      {runMeta && <p className="ranking-note">Run <strong>{String(runMeta.status ?? 'completed')}</strong> · mulai {new Date(String(runMeta.started_at)).toLocaleString('id-ID')} · selesai {runMeta.completed_at ? new Date(String(runMeta.completed_at)).toLocaleString('id-ID') : 'masih berjalan'} · sumber {String(runMeta.universe_source ?? 'legacy')} · metodologi {String(runMeta.methodology_version ?? 'unavailable')}{runMeta.status === 'partial' ? ' · Sebagian emiten gagal diproses; buka audit untuk rinciannya.' : ''}</p>}
       {runErrors.length > 0 && <details className="ranking-run-errors"><summary>Lihat rincian {runErrors.length} error</summary><div>{runErrors.map((item, index) => <p key={`${item.symbol}-${index}`}><strong>{item.symbol}</strong><span>{summarizeRunError(item.error)}</span></p>)}</div></details>}
-      {!loading && <section className="screening-summary">{Object.entries({ Universe: screeningSummary.universe, Evaluated: screeningSummary.evaluated, Passed: screeningSummary.passed, Watch: screeningSummary.watch, Rejected: screeningSummary.rejected, 'Processing error': screeningSummary.processingError }).map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</section>}
+      {!loading && <section className="screening-summary">{Object.entries({ Universe: screeningSummary.universe, 'Data tersedia': screeningSummary.dataAcquisitionSucceeded, 'Lolos pre-screen': screeningSummary.preScreenPassed, 'Analisis kuantitatif': screeningSummary.quantitativeCompleted, Passed: screeningSummary.passed, Watch: screeningSummary.watch, Rejected: screeningSummary.rejected, 'Processing error': screeningSummary.processingError }).map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</section>}
       {!loading && <p className="ranking-note">Coverage AI: {screeningSummary.aiCompleted}/{screeningSummary.aiRequested} selesai · {screeningSummary.aiFailed} gagal. Hasil kuantitatif tetap tersedia terlepas dari status AI.</p>}
       {!error && !loading && rankings.length === 0 && <div className="ranking-empty"><h2>Tidak ada saham yang memenuhi seluruh kriteria screener pada snapshot ini.</h2><p>Status watch, rejected, dan processing error dapat diperiksa di bagian audit di bawah.</p></div>}
 

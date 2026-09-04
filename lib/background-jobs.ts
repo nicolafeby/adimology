@@ -67,7 +67,7 @@ export async function runScreenerBackgroundJob() {
     const log = await createBackgroundJobLog('analyze-watchlist', universeLimit);
     jobId = log.id;
 
-    const result = await runMarketScreener({ universeLimit, deepLimit, aiLimit, concurrency: 4 });
+    const result = await runMarketScreener({ universeLimit, deepLimit, aiLimit, concurrency: 4, triggerSource: 'scheduled', idempotencyKey: `scheduled:${new Date().toISOString().slice(0, 10)}` });
     await updateBackgroundJobLog(log.id, {
       status: 'completed',
       success_count: result.progress.analyzed,

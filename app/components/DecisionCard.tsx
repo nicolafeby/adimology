@@ -10,6 +10,11 @@ const parseRupiahInput = (value: string) => {
   const digits = value.replace(/\D/g, '');
   return digits ? Number(digits) : undefined;
 };
+const RISK_PRESETS = [
+  { key: 'conservative', label: 'Konservatif', riskPercent: 0.5, allocation: 15, atrMultiplier: 2 },
+  { key: 'moderate', label: 'Moderat', riskPercent: 1, allocation: 20, atrMultiplier: 1.5 },
+  { key: 'aggressive', label: 'Agresif', riskPercent: 1.5, allocation: 25, atrMultiplier: 1.5 },
+] as const;
 
 export function DecisionCardView({ decision, symbol, currentPrice, allowSizing = false }: { decision: TradingDecision; symbol: string; currentPrice: number; allowSizing?: boolean }) {
   const displayedCurrentPrice = typeof decision.inputs.currentPrice === 'number' ? decision.inputs.currentPrice : currentPrice;
@@ -35,6 +40,12 @@ export function DecisionCardView({ decision, symbol, currentPrice, allowSizing =
 
 export default function DecisionCard({ result }: { result: StockAnalysisResult }) {
   const [accountSize, setAccountSize] = useState<number | undefined>(1_000_000); const [availableCash, setAvailableCash] = useState<number | undefined>(1_000_000); const [riskPercent, setRiskPercent] = useState(1); const [allocation, setAllocation] = useState(20); const [atrMultiplier, setAtrMultiplier] = useState(1.5);
+  const activePreset = RISK_PRESETS.find((preset) => preset.riskPercent === riskPercent && preset.allocation === allocation && preset.atrMultiplier === atrMultiplier);
+  const applyPreset = (preset: typeof RISK_PRESETS[number]) => {
+    setRiskPercent(preset.riskPercent);
+    setAllocation(preset.allocation);
+    setAtrMultiplier(preset.atrMultiplier);
+  };
   const decision = buildTradeDecision(result, { accountSize, availableCash, riskPercent, maxAllocationPercent: allocation, atrMultiplier, buyFeePercent: 0.15, sellFeePercent: 0.25, liquidityPercentOfAdv: 1 });
-  return <div><DecisionCardView decision={decision} symbol={result.input.emiten} currentPrice={result.marketData.harga} allowSizing /><div className="decision-sizing"><strong>Profil risiko opsional</strong><div className="decision-sizing-inputs"><label>Modal trading (Rp)<input type="text" inputMode="numeric" value={rupiahInput(accountSize)} placeholder="Wajib untuk sizing" onChange={(e) => setAccountSize(parseRupiahInput(e.target.value))} /></label><label>Available cash (Rp)<input type="text" inputMode="numeric" value={rupiahInput(availableCash)} placeholder="Wajib untuk sizing" onChange={(e) => setAvailableCash(parseRupiahInput(e.target.value))} /></label><label>Risiko maksimum (%)<input type="number" min="0" max="100" step="0.1" value={riskPercent} onChange={(e) => setRiskPercent(Number(e.target.value))} /></label><label>Alokasi maksimum (%)<input type="number" min="0" max="100" step="1" value={allocation} onChange={(e) => setAllocation(Number(e.target.value))} /></label><label>ATR multiplier<input type="number" min="0.1" step="0.1" value={atrMultiplier} onChange={(e) => setAtrMultiplier(Number(e.target.value))} /></label></div><small>Default yang dapat diubah: risiko 1%, alokasi 20%, ATR 1,5×, fee beli 0,15%, fee jual 0,25%, likuiditas 1% ADV. Nilai modal tidak diasumsikan atau disimpan.</small></div></div>;
+  return <div><DecisionCardView decision={decision} symbol={result.input.emiten} currentPrice={result.marketData.harga} allowSizing /><div className="decision-sizing"><strong>Profil risiko opsional</strong><div className="risk-preset-header"><span>Pilih preset</span><small>{activePreset?.label ?? 'Kustom'}</small></div><div className="risk-presets">{RISK_PRESETS.map((preset) => <button type="button" key={preset.key} className={activePreset?.key === preset.key ? 'active' : ''} aria-pressed={activePreset?.key === preset.key} onClick={() => applyPreset(preset)}><strong>{preset.label}</strong><span>{preset.riskPercent}% risiko · {preset.allocation}% alokasi · {preset.atrMultiplier}× ATR</span></button>)}</div><div className="decision-sizing-inputs"><label>Modal trading (Rp)<input type="text" inputMode="numeric" value={rupiahInput(accountSize)} placeholder="Wajib untuk sizing" onChange={(e) => setAccountSize(parseRupiahInput(e.target.value))} /></label><label>Available cash (Rp)<input type="text" inputMode="numeric" value={rupiahInput(availableCash)} placeholder="Wajib untuk sizing" onChange={(e) => setAvailableCash(parseRupiahInput(e.target.value))} /></label><label>Risiko maksimum (%)<input type="number" min="0" max="2" step="0.1" value={riskPercent} onChange={(e) => setRiskPercent(Number(e.target.value))} /></label><label>Alokasi maksimum (%)<input type="number" min="0" max="100" step="1" value={allocation} onChange={(e) => setAllocation(Number(e.target.value))} /></label><label>ATR multiplier<input type="number" min="0.1" step="0.1" value={atrMultiplier} onChange={(e) => setAtrMultiplier(Number(e.target.value))} /></label></div><small>Preset hanya mengubah risiko, alokasi, dan ATR multiplier. Modal serta available cash tidak berubah. Fee beli 0,15%, fee jual 0,25%, dan batas likuiditas 1% ADV.</small></div></div>;
 }

@@ -1338,8 +1338,16 @@ export async function saveSignalSnapshots(rows: Array<Record<string, unknown>>) 
   if (!rows.length) return [];
   const { data, error } = await getSupabaseAdmin()
     .from('signal_snapshots')
-    .upsert(rows, { onConflict: 'signal_date,symbol,model_version' })
+    .insert(rows)
     .select();
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** Append-only audit records; detail APIs never select the raw payload. */
+export async function saveSourceSnapshots(rows: Array<Record<string, unknown>>) {
+  if (!rows.length) return [];
+  const { data, error } = await getSupabaseAdmin().from('source_snapshots').insert(rows).select('id,symbol,data_type,temporal_validation_status');
   if (error) throw error;
   return data ?? [];
 }
@@ -1348,7 +1356,7 @@ export async function getPendingSignalSnapshots(limit = 100, configVersion = 'le
   const db = getSupabaseAdmin();
   const { data: evaluated } = await db.from('signal_outcomes').select('snapshot_id').eq('backtest_config_version', configVersion);
   const ids = (evaluated ?? []).map((row) => row.snapshot_id);
-  let query = db.from('signal_snapshots').select('*').lte('signal_date', new Date(Date.now() - 28 * 86400000).toISOString().slice(0, 10)).limit(limit);
+  let query = db.from('signal_snapshots').select('*').eq('point_in_time_valid', true).eq('backtest_eligible', true).lte('signal_date', new Date(Date.now() - 28 * 86400000).toISOString().slice(0, 10)).limit(limit);
   if (ids.length) query = query.not('id', 'in', `(${ids.join(',')})`);
   const { data, error } = await query;
   if (error) throw error;
@@ -1366,7 +1374,7 @@ export async function getBacktestRows(modelVersion?: string) {
   const db = getSupabaseAdmin();
   const [{ data: outcomes, error: outcomeError }, { data: snapshots, error: snapshotError }] = await Promise.all([
     db.from('signal_outcomes').select('*'),
-    db.from('signal_snapshots').select('id, signal_date, score, signal, model_version, feature_snapshot'),
+    db.from('signal_snapshots').select('id, signal_date, score, signal, model_version, feature_snapshot, execution_mode, point_in_time_valid, backtest_eligible'),
   ]);
   if (outcomeError) throw outcomeError;
   if (snapshotError) throw snapshotError;
@@ -1374,12 +1382,12 @@ export async function getBacktestRows(modelVersion?: string) {
   return (outcomes ?? []).map((row) => {
     const snapshot = snapshotMap.get(row.snapshot_id);
     return { ...row, signal_date: snapshot?.signal_date ?? null, snapshot, model_probability: snapshot?.feature_snapshot?.model_probability ?? null };
-  }).filter((row) => !modelVersion || row.snapshot?.model_version === modelVersion);
+  }).filter((row) => row.snapshot?.point_in_time_valid === true && row.snapshot?.backtest_eligible === true && (!modelVersion || row.snapshot?.model_version === modelVersion));
 }
 
 export async function getCalibrationObservations(context: CalibrationContext): Promise<CalibrationObservation[]> {
   const db = getSupabaseAdmin();
-  const { data, error } = await db.from('signal_snapshots').select('id, signal_date, score, model_version, methodology_version, market_regime, feature_snapshot, execution_model, outcome_definition, selection_scope').eq('model_version', context.modelVersion).eq('methodology_version', context.methodologyVersion).eq('execution_model', context.executionModel).eq('outcome_definition', context.outcomeDefinition).eq('selection_scope', context.selectionScope).lt('signal_date', context.analysisDate);
+  const { data, error } = await db.from('signal_snapshots').select('id, signal_date, score, model_version, methodology_version, market_regime, feature_snapshot, execution_model, outcome_definition, selection_scope').eq('point_in_time_valid', true).eq('backtest_eligible', true).eq('model_version', context.modelVersion).eq('methodology_version', context.methodologyVersion).eq('execution_model', context.executionModel).eq('outcome_definition', context.outcomeDefinition).eq('selection_scope', context.selectionScope).lt('signal_date', context.analysisDate);
   if (error) throw error;
   if (!data?.length) return [];
   const snapshotMap = new Map(data.map((row) => [row.id, row]));

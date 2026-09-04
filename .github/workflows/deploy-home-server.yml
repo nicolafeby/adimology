@@ -73,6 +73,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Run database migrations
+        run: npm run migrate
+
       - name: Check port on first deployment
         run: |
           if ! npx --no-install pm2 describe adimology >/dev/null 2>&1; then

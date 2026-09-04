@@ -3,6 +3,8 @@ import type { HistoricalSummaryItem } from './stockbit';
 import { applyMarketRegimeGate } from './market-regime';
 import type { MarketRegimeAnalysis, RelativeStrengthAnalysis } from './types';
 
+export const RANKING_QUALITY_THRESHOLDS = Object.freeze({ minimumCompleteness: 60, preferredCompleteness: 70, minimumConfidence: 45, confirmedConfidence: 65 });
+
 const metricNumber = (components: AnalysisComponent[], key: string) => {
   for (const component of components) {
     const value = component.metrics.find((item) => item.key === key)?.value;
@@ -69,9 +71,11 @@ export function classifyTrend(analysis: ComprehensiveAnalysis): { signal: TrendS
   if (atr !== null && atr > 8) riskFlags.push(`Volatilitas tinggi (${atr.toFixed(1)}%)`);
   if (liquidity !== null && liquidity < 50) riskFlags.push('Likuiditas/orderbook lemah');
   if (analysis.dataCompleteness < 70) riskFlags.push('Data belum cukup lengkap');
+  if (analysis.confidence < RANKING_QUALITY_THRESHOLDS.minimumConfidence) riskFlags.push('Confidence analisis rendah');
+  for (const conflict of analysis.quality?.conflicts ?? []) if (conflict.severity === 'high') riskFlags.push(conflict.message);
   let signal: TrendSignal = 'watch';
-  if (analysis.dataCompleteness < 60 || analysis.score < 45 || riskFlags.length >= 2) signal = 'avoid';
-  else if (analysis.score >= 70 && (volume ?? 0) >= 1.2 && (broker ?? 0) >= 60) signal = 'confirmed_uptrend';
+  if (analysis.quality?.dominantDirection === 'bearish' || analysis.dataCompleteness < RANKING_QUALITY_THRESHOLDS.minimumCompleteness || analysis.score < 45 || riskFlags.length >= 2) signal = 'avoid';
+  else if (analysis.score >= 70 && analysis.confidence >= RANKING_QUALITY_THRESHOLDS.confirmedConfidence && !(analysis.quality?.conflicts.some((conflict) => conflict.severity === 'high')) && (volume ?? 0) >= 1.2 && (broker ?? 0) >= 60) signal = 'confirmed_uptrend';
   else if (analysis.score >= 60 && (r5 ?? 0) > 0) signal = 'early_uptrend';
   return { signal, reasons: reasons.slice(0, 4), riskFlags };
 }

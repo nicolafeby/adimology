@@ -119,12 +119,73 @@ export interface AnalysisMetric {
   description: string;
 }
 
+export type SignalDirection = 'bullish' | 'neutral' | 'bearish' | 'unavailable';
+export type FreshnessStatus = 'fresh' | 'aging' | 'stale' | 'unknown';
+export type FreshnessSource = 'orderbook' | 'marketPrice' | 'brokerSummary' | 'historicalPrice' | 'fundamental' | 'catalyst' | 'benchmark';
+
+export interface FreshnessAssessment {
+  source: FreshnessSource;
+  observedAt: string | null;
+  ageSeconds: number | null;
+  ageDays: number | null;
+  freshnessScore: number | null;
+  status: FreshnessStatus;
+}
+
+export interface ReliabilityAssessment {
+  score: number;
+  issues: string[];
+  fallbackUsed: boolean;
+  sampleSizes: Record<string, number>;
+}
+
+export interface SignalConflict {
+  key: string;
+  severity: 'low' | 'medium' | 'high';
+  components: AnalysisComponent['key'][];
+  message: string;
+}
+
+export interface SignalAgreement {
+  score: number | null;
+  label: 'strong' | 'moderate' | 'mixed' | 'conflicting' | 'unavailable';
+  dominantDirection: SignalDirection;
+  bullishWeight: number;
+  neutralWeight: number;
+  bearishWeight: number;
+  activeDirectionalWeight: number;
+  conflicts: SignalConflict[];
+  explanation: string;
+}
+
+export interface AnalysisQuality {
+  completeness: number;
+  agreement: SignalAgreement;
+  confidence: number;
+  freshness: { score: number | null; sources: FreshnessAssessment[] };
+  reliability: ReliabilityAssessment;
+  dominantDirection: SignalDirection;
+  activeComponentCount: number;
+  conflicts: SignalConflict[];
+  warnings: string[];
+  calculatedAt: string;
+  methodologyVersion: string;
+}
+
 export interface AnalysisComponent {
   key: 'brokerFlow' | 'technical' | 'fundamental' | 'valuation' | 'liquidity' | 'catalyst' | 'marketRegime';
   label: string;
   weight: number;
   score: number | null;
   available: boolean;
+  coverage?: number;
+  requiredMetrics?: string[];
+  availableMetrics?: string[];
+  missingMetrics?: string[];
+  direction?: SignalDirection;
+  directionalValue?: number | null;
+  freshness?: FreshnessAssessment;
+  reliability?: ReliabilityAssessment;
   metrics: AnalysisMetric[];
   /** Stored inside the existing components JSON for schema-compatible persistence. */
   marketContext?: { regime: MarketRegimeAnalysis; relativeStrength: RelativeStrengthAnalysis; gate: MarketGateAudit };
@@ -138,6 +199,9 @@ export interface ComprehensiveAnalysis {
   confidence: number;
   /** Degree to which the available component scores point in the same direction. */
   agreement: number;
+  /** Added in quality-v1. Undefined on legacy snapshots. */
+  quality?: AnalysisQuality;
+  methodologyVersion?: string;
   label: 'Kuat' | 'Positif' | 'Netral' | 'Hati-hati' | 'Lemah';
   horizon: string;
   generatedAt: string;
@@ -241,6 +305,14 @@ export interface StockRanking {
   rank: number;
   score: number;
   data_completeness: number;
+  signal_agreement?: number | null;
+  confidence?: number | null;
+  freshness?: number | null;
+  reliability?: number | null;
+  dominant_direction?: SignalDirection | null;
+  conflicts?: SignalConflict[] | null;
+  analysis_quality?: AnalysisQuality | null;
+  methodology_version?: string | null;
   model_probability: number | null;
   signal: TrendSignal;
   last_price: number;

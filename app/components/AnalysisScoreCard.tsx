@@ -7,11 +7,15 @@ const formatMetric = (value: number | string | null, unit?: string) => {
 };
 
 export default function AnalysisScoreCard({ analysis }: { analysis: ComprehensiveAnalysis }) {
-  const completeness = analysis.dataCompleteness ?? analysis.confidence;
+  const quality = analysis.quality;
+  const completeness = analysis.dataCompleteness;
+  const show = (value: number | null | undefined) => value == null ? 'Belum tersedia pada versi analisis ini' : `${value}%`;
   const indicators = [
-    { label: 'Kelengkapan data', value: completeness, title: 'Persentase bobot komponen yang datanya tersedia.' },
-    { label: 'Confidence', value: analysis.confidence, title: 'Reliabilitas bukti di dalam komponen yang tersedia.' },
-    { label: 'Agreement', value: analysis.agreement ?? 0, title: 'Keselarasan skor antar-komponen yang tersedia.' },
+    { label: 'Kelengkapan data', value: completeness, title: 'Berapa banyak input yang tersedia, termasuk coverage internal tiap komponen.' },
+    { label: 'Kesepakatan sinyal', value: quality?.agreement.score, title: 'Seberapa selaras arah bullish, netral, atau bearish antar-komponen.' },
+    { label: 'Confidence', value: quality?.confidence ?? analysis.confidence, title: 'Seberapa layak hasil dipercaya berdasarkan completeness, agreement, freshness, reliability, dan penalty.' },
+    { label: 'Freshness', value: quality?.freshness.score, title: 'Kesegaran sumber yang memiliki timestamp asli.' },
+    { label: 'Reliability', value: quality?.reliability.score, title: 'Kualitas, validitas, fallback, dan ukuran sampel data.' },
   ];
   return (
     <section className="analysis-score-card">
@@ -22,11 +26,13 @@ export default function AnalysisScoreCard({ analysis }: { analysis: Comprehensiv
       <div className="analysis-indicators">
         {indicators.map((indicator) => (
           <div className="analysis-indicator" key={indicator.label} title={indicator.title}>
-            <span>{indicator.label}</span><strong>{indicator.value}%</strong>
-            <div><i style={{ width: `${indicator.value}%` }} /></div>
+            <span>{indicator.label}</span><strong>{show(indicator.value)}</strong>
+            <div><i style={{ width: `${indicator.value ?? 0}%` }} /></div>
           </div>
         ))}
       </div>
+      {quality && <div className="analysis-warning"><strong>Arah dominan: {quality.dominantDirection}</strong> · Agreement {quality.agreement.label}</div>}
+      {quality?.conflicts.length ? <div className="analysis-warning"><strong>Konflik utama:</strong><ul>{quality.conflicts.map((conflict) => <li key={conflict.key}>{conflict.message} ({conflict.severity})</li>)}</ul></div> : null}
       <div className="analysis-components">
         {analysis.components.map((component) => (
           <details className="analysis-component" key={component.key}>

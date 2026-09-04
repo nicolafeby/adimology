@@ -75,9 +75,15 @@ export function segmentBacktest(rows: Array<Record<string, unknown>>, config: Ba
     executionModel: (r) => String(r.execution_model ?? 'legacy_close'),
     signal: (r) => String((r.snapshot as { signal?: unknown } | undefined)?.signal ?? 'unknown'),
     scoreBucket: (r) => { const score = Number((r.snapshot as { score?: unknown } | undefined)?.score); return Number.isFinite(score) ? `${Math.floor(score / 10) * 10}-${Math.floor(score / 10) * 10 + 9}` : 'unknown'; },
+    confidenceBucket: (r) => qualityBucket((r.snapshot as { confidence?: unknown; feature_snapshot?: { analysis_quality?: { confidence?: unknown } } } | undefined)?.confidence ?? (r.snapshot as { feature_snapshot?: { analysis_quality?: { confidence?: unknown } } } | undefined)?.feature_snapshot?.analysis_quality?.confidence),
+    agreementBucket: (r) => qualityBucket((r.snapshot as { signal_agreement?: unknown; feature_snapshot?: { analysis_quality?: { agreement?: { score?: unknown } } } } | undefined)?.signal_agreement ?? (r.snapshot as { feature_snapshot?: { analysis_quality?: { agreement?: { score?: unknown } } } } | undefined)?.feature_snapshot?.analysis_quality?.agreement?.score),
+    completenessBucket: (r) => qualityBucket((r.snapshot as { data_completeness?: unknown; feature_snapshot?: { analysis_quality?: { completeness?: unknown } } } | undefined)?.data_completeness ?? (r.snapshot as { feature_snapshot?: { analysis_quality?: { completeness?: unknown } } } | undefined)?.feature_snapshot?.analysis_quality?.completeness),
+    dominantDirection: (r) => String((r.snapshot as { dominant_direction?: unknown; feature_snapshot?: { analysis_quality?: { dominantDirection?: unknown } } } | undefined)?.dominant_direction ?? (r.snapshot as { feature_snapshot?: { analysis_quality?: { dominantDirection?: unknown } } } | undefined)?.feature_snapshot?.analysis_quality?.dominantDirection ?? 'unknown'),
     marketRegime: (r) => String((r.snapshot as { feature_snapshot?: { market_regime?: unknown } } | undefined)?.feature_snapshot?.market_regime ?? 'unknown'),
     sector: (r) => String((r.snapshot as { feature_snapshot?: { sector?: unknown } } | undefined)?.feature_snapshot?.sector ?? 'unknown'),
     period: (r) => String(r.signal_date ?? '').slice(0, 7) || 'unknown',
   };
   return Object.fromEntries(Object.entries(dimensions).map(([name, select]) => { const groups = new Map<string, Array<Record<string, unknown>>>(); for (const row of rows) { const key = select(row); groups.set(key, [...(groups.get(key) ?? []), row]); } return [name, [...groups.entries()].map(([key, cohort]) => ({ key, summary: summarizeBacktest(cohort, config) }))]; }));
 }
+
+function qualityBucket(value: unknown) { const number = Number(value); return Number.isFinite(number) ? `${Math.floor(number / 20) * 20}-${Math.min(100, Math.floor(number / 20) * 20 + 19)}` : 'unknown'; }

@@ -1195,7 +1195,7 @@ export async function getStockRankings(date?: string, limit = 10) {
   const uniqueRanks = new Map<number, (typeof data)[number]>();
   for (const row of data ?? []) {
     const reasons = Array.isArray(row.reasons) ? row.reasons : [];
-    const isAiV2 = reasons.some((reason: { label?: string; value?: string }) => reason.label === 'Scoring Model' && ['multifactor-ai-v2', 'multifactor-regime-rs-v3', 'multifactor-decision-v4'].includes(reason.value ?? ''))
+    const isAiV2 = reasons.some((reason: { label?: string; value?: string }) => reason.label === 'Scoring Model' && ['multifactor-ai-v2', 'multifactor-regime-rs-v3', 'multifactor-decision-v4', 'multifactor-quality-v5'].includes(reason.value ?? ''))
       && reasons.some((reason: { label?: string }) => reason.label === 'AI Story');
     if (isAiV2 && !uniqueRanks.has(Number(row.rank))) uniqueRanks.set(Number(row.rank), hydrateRankingMarketContext(row));
   }

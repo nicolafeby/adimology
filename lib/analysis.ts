@@ -10,6 +10,8 @@ import type { AiStoryScoring } from './types';
 import type { HistoricalSummaryItem } from './stockbit';
 import { calculateHistoricalFeatures, calculateMarketRegime } from './market-regime';
 import { calculateWilderAtr } from './risk-management';
+import { ANALYSIS_QUALITY_VERSION, buildAnalysisQuality, calculateComponentCoverage, calculateFreshness, normalizeComponentDirection } from './analysis-quality';
+import type { FreshnessSource } from './types';
 
 const clamp = (value: number, min = 0, max = 100) => Math.min(max, Math.max(min, value));
 const finite = (value: number) => Number.isFinite(value) ? value : 0;
@@ -191,7 +193,10 @@ export function buildComprehensiveAnalysis(input: {
   brokerHistory?: BrokerHistoryRow[];
   benchmarkHistory?: HistoricalSummaryItem[];
   catalyst?: { matriks_story?: Array<{ potensi_dampak_harga?: string }>; kesimpulan?: string; swot_analysis?: { ai_scoring?: AiStoryScoring }; created_at?: string } | null;
+  now?: Date;
+  sourceTimestamps?: Partial<Record<FreshnessSource, string | null>>;
 }): ComprehensiveAnalysis {
+  const now = input.now ?? new Date();
   const regime = calculateMarketRegime(input.benchmarkHistory ?? []);
   const aiScoring = input.catalyst?.swot_analysis?.ai_scoring;
   const catalystComponent: AnalysisComponent = aiScoring ? {
@@ -213,7 +218,7 @@ export function buildComprehensiveAnalysis(input: {
       metric('marketSma20Trend', 'Tren SMA20 IHSG', regime.features.sma20Trend, regime.features.sma20Trend === null ? 'unavailable' : regime.features.sma20Trend > 0 ? 'positive' : 'negative', 'Perubahan SMA20 selama lima sesi.', '%'),
     ],
   } : { key: 'marketRegime', label: 'Market Regime IHSG', weight: 5, score: null, available: false, metrics: [metric('marketRegimeLabel', 'Regime', 'unavailable', 'unavailable', regime.reasons.join(' '))] };
-  const components: AnalysisComponent[] = [
+  const rawComponents: AnalysisComponent[] = [
     brokerFlowComponent(input.brokerSummary, input.brokerHistory),
     technicalComponent(input.history ?? []),
     ...fundamentalComponents(input.keyStats),
@@ -221,28 +226,47 @@ export function buildComprehensiveAnalysis(input: {
     catalystComponent,
     marketComponent,
   ];
+  const requiredByComponent: Record<AnalysisComponent['key'], string[]> = {
+    brokerFlow: ['accdist', 'top3Concentration', 'buyerBreadth', 'persistence'],
+    technical: ['return5d', 'return20d', 'sma20', 'atr', 'volumeRatio'],
+    fundamental: ['roe', 'margin', 'debt', 'growth'],
+    valuation: ['per', 'pbv'],
+    liquidity: ['bid', 'offer', 'spread', 'depth', 'slippage'],
+    catalyst: ['status', 'freshness', 'sources', 'structuredScore'],
+    marketRegime: ['return5d', 'return20d', 'sma20Trend', 'history'],
+  };
+  const freshnessSourceByComponent: Record<AnalysisComponent['key'], FreshnessSource> = { brokerFlow: 'brokerSummary', technical: 'historicalPrice', fundamental: 'fundamental', valuation: 'fundamental', liquidity: 'orderbook', catalyst: 'catalyst', marketRegime: 'benchmark' };
+  const latestHistory = input.history?.filter((row) => row.date).map((row) => row.date).sort().at(-1);
+  const latestBenchmark = input.benchmarkHistory?.filter((row) => row.date).map((row) => row.date).sort().at(-1);
+  const inferredTimestamps: Partial<Record<FreshnessSource, string | null>> = { historicalPrice: latestHistory ? `${latestHistory}T16:00:00+07:00` : null, benchmark: latestBenchmark ? `${latestBenchmark}T16:00:00+07:00` : null, catalyst: input.catalyst?.created_at ?? null, ...input.sourceTimestamps };
+  const components = rawComponents.map((component): AnalysisComponent => {
+    const required = requiredByComponent[component.key];
+    const metricAvailable = (key: string) => component.metrics.some((item) => item.key.toLowerCase().includes(key.toLowerCase()) && item.value !== null && item.signal !== 'unavailable');
+    const values: Record<string, unknown> = {};
+    for (const key of required) values[key] = metricAvailable(key) ? true : null;
+    if (component.key === 'liquidity' && component.available) Object.assign(values, { bid: true, offer: true, depth: true });
+    if (component.key === 'catalyst' && component.available) Object.assign(values, { status: true, structuredScore: true, freshness: inferredTimestamps.catalyst ?? null, sources: input.catalyst?.matriks_story?.length ? true : null });
+    if (component.key === 'marketRegime' && component.available) Object.assign(values, { return5d: regime.features.return5d, return20d: regime.features.return20d, sma20Trend: regime.features.sma20Trend, history: regime.features.sessions >= 20 ? true : null });
+    if (component.key === 'fundamental' || component.key === 'valuation') component.metrics.forEach((item, index) => { values[required[index] ?? item.key] = item.value; });
+    const coverage = calculateComponentCoverage(required, values);
+    const direction = normalizeComponentDirection(component.score, component.key === 'marketRegime' && regime.label === 'bearish');
+    const freshness = calculateFreshness(freshnessSourceByComponent[component.key], inferredTimestamps[freshnessSourceByComponent[component.key]], now);
+    return { ...component, ...coverage, ...direction, freshness, reliability: { score: coverage.coverage, issues: coverage.missingMetrics.map((key) => `${key} tidak tersedia`), fallbackUsed: false, sampleSizes: {} } };
+  });
   const available = components.filter((x) => x.available && x.score !== null);
   const availableWeight = available.reduce((sum, x) => sum + x.weight, 0);
   const score = availableWeight > 0
     ? Math.round(available.reduce((sum, x) => sum + (x.score ?? 0) * x.weight, 0) / availableWeight)
     : 50;
-  const dataCompleteness = Math.round((availableWeight / components.reduce((sum, x) => sum + x.weight, 0)) * 100);
-  const componentConfidence = (component: AnalysisComponent) => {
-    if (component.key === 'catalyst' && aiScoring) return clamp(aiScoring.confidence);
-    if (!component.metrics.length) return 0;
-    const usableMetrics = component.metrics.filter((item) => item.signal !== 'unavailable' && item.value !== null).length;
-    return (usableMetrics / component.metrics.length) * 100;
-  };
-  const confidence = availableWeight > 0
-    ? Math.round(available.reduce((sum, component) => sum + componentConfidence(component) * component.weight, 0) / availableWeight)
-    : 0;
-  const agreement = available.length >= 2
-    ? Math.round(clamp(100 - (available.reduce((sum, component) => sum + Math.abs((component.score ?? score) - score) * component.weight, 0) / availableWeight) * 2))
-    : 0;
+  const freshnessSources = (['orderbook', 'marketPrice', 'brokerSummary', 'historicalPrice', 'fundamental', 'catalyst', 'benchmark'] as FreshnessSource[]).map((source) => calculateFreshness(source, inferredTimestamps[source], now));
+  const quality = buildAnalysisQuality({ components, now, freshness: freshnessSources, historySamples: input.history?.length ?? 0, brokerHistorySamples: input.brokerHistory?.length ?? 0, catalystConfidence: aiScoring?.confidence ?? null });
+  const dataCompleteness = quality.completeness;
+  const confidence = quality.confidence;
+  const agreement = quality.agreement.score ?? 0;
   const label: ComprehensiveAnalysis['label'] = score >= 75 ? 'Kuat' : score >= 60 ? 'Positif' : score >= 45 ? 'Netral' : score >= 30 ? 'Hati-hati' : 'Lemah';
   const missing = components.filter((x) => !x.available).map((x) => x.label);
   return {
-    score, dataCompleteness, confidence, agreement, label, horizon: 'Swing 5–20 hari', generatedAt: new Date().toISOString(), components,
-    warnings: missing.length ? [`Komponen belum tersedia dan tidak dihitung: ${missing.join(', ')}.`] : [],
+    score, dataCompleteness, confidence, agreement, quality, methodologyVersion: ANALYSIS_QUALITY_VERSION, label, horizon: 'Swing 5–20 hari', generatedAt: now.toISOString(), components,
+    warnings: [...(missing.length ? [`Komponen belum tersedia dan tidak dihitung: ${missing.join(', ')}.`] : []), ...quality.warnings],
   };
 }

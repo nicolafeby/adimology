@@ -12,6 +12,8 @@ import { calculateHistoricalFeatures, calculateMarketRegime } from './market-reg
 import { calculateWilderAtr } from './risk-management';
 import { ANALYSIS_QUALITY_VERSION, buildAnalysisQuality, calculateComponentCoverage, calculateFreshness, normalizeComponentDirection } from './analysis-quality';
 import type { FreshnessSource } from './types';
+import { assessBrokerPersistence, assessExecution, sectorFamily, sectorRelativeMetric, type PeerObservation } from './screener-factors';
+import { ACTIVE_STRATEGY_PROFILE, BROKER_FLOW_POLICY, EXECUTION_POLICY, SECTOR_PEER_POLICY } from './screener-factor-config';
 
 const clamp = (value: number, min = 0, max = 100) => Math.min(max, Math.max(min, value));
 const finite = (value: number) => Number.isFinite(value) ? value : 0;
@@ -32,74 +34,46 @@ interface BrokerHistoryRow { from_date: string; bandar?: string; barang_bandar?:
 function brokerFlowComponent(summary?: BrokerSummaryData, history: BrokerHistoryRow[] = []): AnalysisComponent {
   const weight = 25;
   if (!summary) return { key: 'brokerFlow', label: 'Broker Flow', weight, score: null, available: false, metrics: [] };
-
   const detector = summary.detector;
-  const text = `${detector.broker_accdist} ${detector.top3.accdist}`.toLowerCase();
-  const accumulation = /acc|akum|buy/.test(text);
-  const distribution = /dist|distrib|sell/.test(text);
   const concentration = finite(Number(detector.top3.percent));
   const breadth = detector.total_buyer + detector.total_seller > 0
     ? detector.total_buyer / (detector.total_buyer + detector.total_seller)
     : 0.5;
-  let score = 50 + (accumulation ? 20 : 0) - (distribution ? 20 : 0);
-  score += clamp(concentration, 0, 50) * 0.2;
-  score += (breadth - 0.5) * 30;
-  const recent = history.slice(0, 10);
-  const dominantBroker = recent[0]?.bandar;
-  const persistence = dominantBroker && recent.length
-    ? recent.filter((row) => row.bandar === dominantBroker).length / recent.length
-    : null;
-  if (persistence !== null) score += (persistence - 0.3) * 15;
+  const persistence = assessBrokerPersistence(history.map(row => ({ date: row.from_date, broker: row.bandar, netValue: row.barang_bandar, averagePrice: row.rata_rata_bandar })));
+  const concentrationRisk = concentration >= BROKER_FLOW_POLICY.extremeTop3ConcentrationPercent;
+  const score = persistence.available ? clamp((persistence.score ?? 0) * .8 + breadth * 20 - (concentrationRisk ? 10 : 0)) : null;
 
   return {
-    key: 'brokerFlow', label: 'Broker Flow', weight, score: Math.round(clamp(score)), available: true,
+    key: 'brokerFlow', label: 'Broker Persistence', weight, score: score === null ? null : Math.round(score), available: score !== null,
+    role: 'ranking_factor', horizon: 'swing', sampleSize: persistence.sampleSize, methodologyVersion: persistence.methodologyVersion,
+    warnings: [...persistence.warnings, ...(concentrationRisk ? ['Konsentrasi top-3 ekstrem meningkatkan risiko exit.'] : [])],
     metrics: [
-      metric('accdist', 'Akumulasi/Distribusi', detector.broker_accdist || '-', accumulation ? 'positive' : distribution ? 'negative' : 'neutral', 'Sinyal agregat dari broker detector.'),
-      metric('top3Concentration', 'Konsentrasi Top 3', concentration, concentration >= 20 ? 'positive' : 'neutral', 'Porsi aktivitas tiga broker teratas.', '%'),
+      metric('accdist', 'Label Snapshot (Informasional)', detector.broker_accdist || '-', 'neutral', 'Label provider tidak digunakan untuk menentukan skor.'),
+      metric('top3Concentration', 'Konsentrasi Top 3', concentration, concentrationRisk ? 'negative' : 'neutral', 'Konsentrasi ekstrem adalah risiko likuiditas, bukan bukti smart money.', '%'),
       metric('buyerBreadth', 'Breadth Buyer', Math.round(breadth * 1000) / 10, breadth >= 0.55 ? 'positive' : breadth <= 0.45 ? 'negative' : 'neutral', 'Perbandingan jumlah buyer terhadap seluruh broker aktif.', '%'),
-      metric('persistence', 'Persistensi Broker 10 Hari', persistence === null ? null : Math.round(persistence * 100), persistence === null ? 'unavailable' : persistence >= 0.5 ? 'positive' : 'neutral', 'Frekuensi broker dominan terbaru kembali menjadi top buyer.', '%'),
+      metric('persistence', 'Sesi Akumulasi 10 Sesi', persistence.accumulationSessions.d10, persistence.available ? 'neutral' : 'unavailable', 'Jumlah sesi dengan net accumulation setelah sort dan dedup tanggal.', 'sesi'),
+      metric('brokerPersistence', 'Persistensi Broker', persistence.persistence, persistence.persistence === null ? 'unavailable' : persistence.persistence >= 60 ? 'positive' : 'neutral', `Sample ${persistence.sampleSize}; missing ${persistence.missingSessions} sesi.`, '%'),
     ],
   };
 }
 
-function liquidityComponent(orderbook: OrderbookSnapshot | undefined, lastPrice: number): AnalysisComponent {
+function liquidityComponent(orderbook: OrderbookSnapshot | undefined, lastPrice: number, history: HistoricalSummaryItem[], observedAt?: string | null, now?: Date, ara?: number | null, arb?: number | null): AnalysisComponent {
   const weight = 10;
-  if (!orderbook || orderbook.bid.length === 0 || orderbook.offer.length === 0 || lastPrice <= 0) {
+  if (!orderbook || lastPrice <= 0) {
     return { key: 'liquidity', label: 'Likuiditas & Orderbook', weight, score: null, available: false, metrics: [] };
   }
-  const bids = [...orderbook.bid].sort((a, b) => b.price - a.price);
-  const offers = [...orderbook.offer].sort((a, b) => a.price - b.price);
-  const bestBid = bids[0].price;
-  const bestOffer = offers[0].price;
-  const mid = (bestBid + bestOffer) / 2;
-  const spreadPct = mid > 0 ? ((bestOffer - bestBid) / mid) * 100 : 0;
-  const nearBid = bids.filter((x) => x.price >= bestBid * 0.99).reduce((sum, x) => sum + x.volume, 0);
-  const nearOffer = offers.filter((x) => x.price <= bestOffer * 1.01).reduce((sum, x) => sum + x.volume, 0);
-  const imbalance = nearBid + nearOffer > 0 ? ((nearBid - nearOffer) / (nearBid + nearOffer)) * 100 : 0;
-
-  const slippage = (levels: typeof bids, shares: number) => {
-    let remaining = shares;
-    let value = 0;
-    for (const level of levels) {
-      const filled = Math.min(remaining, level.volume);
-      value += filled * level.price;
-      remaining -= filled;
-      if (remaining <= 0) break;
-    }
-    if (remaining > 0 || value <= 0) return null;
-    const average = value / shares;
-    return Math.abs((average - levels[0].price) / levels[0].price) * 100;
-  };
-  const buySlippage = slippage(offers, 10_000);
-  let score = 55 - Math.min(spreadPct, 5) * 8 + clamp(imbalance, -50, 50) * 0.25;
-  if (buySlippage !== null) score -= Math.min(buySlippage, 5) * 5;
+  const execution = assessExecution({ orderbook, history, lastPrice, observedAt, now, ara, arb });
+  const reference = execution.scenarios.find(x => x.notional === 50_000_000) ?? execution.scenarios[0];
 
   return {
-    key: 'liquidity', label: 'Likuiditas & Orderbook', weight, score: Math.round(clamp(score)), available: true,
+    key: 'liquidity', label: 'Kualitas Eksekusi', weight, score: execution.score, available: execution.available,
+    role: EXECUTION_POLICY.role, horizon: EXECUTION_POLICY.horizon, methodologyVersion: execution.methodologyVersion, execution, warnings: execution.warnings,
     metrics: [
-      metric('spread', 'Bid–Ask Spread', Math.round(spreadPct * 100) / 100, spreadPct <= 0.5 ? 'positive' : spreadPct >= 1.5 ? 'negative' : 'neutral', 'Spread lebih kecil menandakan biaya eksekusi lebih rendah.', '%'),
-      metric('nearImbalance', 'Near-touch Imbalance', Math.round(imbalance * 10) / 10, imbalance >= 15 ? 'positive' : imbalance <= -15 ? 'negative' : 'neutral', 'Keseimbangan depth dalam jarak 1% dari best bid/offer.', '%'),
-      metric('buySlippage', 'Estimasi Slippage Beli 100 lot', buySlippage === null ? null : Math.round(buySlippage * 100) / 100, buySlippage === null ? 'unavailable' : buySlippage <= 0.5 ? 'positive' : buySlippage >= 1.5 ? 'negative' : 'neutral', 'Estimasi dampak harga untuk market buy 100 lot.', '%'),
+      metric('spread', 'Bid–Ask Spread', execution.spreadPercent, execution.spreadPercent === null ? 'unavailable' : execution.spreadPercent <= .5 ? 'positive' : execution.spreadPercent >= 1.5 ? 'negative' : 'neutral', 'Biaya eksekusi; locked/crossed/limit book tidak dianggap normal.', '%'),
+      metric('nearImbalance', 'Near-touch Imbalance (Informasional)', execution.nearTouchImbalancePercent, execution.nearTouchImbalancePercent === null ? 'unavailable' : 'neutral', 'Konteks snapshot saja; kontribusi directional = 0.', '%'),
+      metric('buySlippage', 'Slippage Beli Skenario Rp50 jt', reference?.estimatedBuySlippagePercent ?? null, reference?.estimatedBuySlippagePercent === null ? 'unavailable' : 'neutral', 'Skenario referensi, bukan rekomendasi personal.', '%'),
+      metric('sellSlippage', 'Slippage Jual Skenario Rp50 jt', reference?.estimatedSellSlippagePercent ?? null, reference?.estimatedSellSlippagePercent === null ? 'unavailable' : 'neutral', 'Exit feasibility dihitung terpisah.', '%'),
+      metric('medianDailyValue20d', 'Median Nilai Transaksi 20D', execution.medianDailyValue20d, execution.medianDailyValue20d === null ? 'unavailable' : 'neutral', 'Median mengurangi pengaruh hari abnormal.', 'Rp'),
     ],
   };
 }
@@ -153,7 +127,7 @@ function findStat(data: KeyStatsData, patterns: RegExp[]) {
   return found ? { name: found.name, value: parseValue(found.value), raw: found.value } : null;
 }
 
-function fundamentalComponents(data?: KeyStatsData): AnalysisComponent[] {
+function fundamentalComponents(data?: KeyStatsData, context: { symbol?: string; sector?: string | null; subsector?: string | null; peers?: PeerObservation[]; cutoff?: string } = {}): AnalysisComponent[] {
   const unavailable = (key: 'fundamental' | 'valuation', label: string, weight: number): AnalysisComponent => ({ key, label, weight, score: null, available: false, metrics: [] });
   if (!data) return [unavailable('fundamental', 'Fundamental', 20), unavailable('valuation', 'Valuasi', 10)];
   const roe = findStat(data, [/return on equity/, /^roe/]);
@@ -162,25 +136,28 @@ function fundamentalComponents(data?: KeyStatsData): AnalysisComponent[] {
   const revenueGrowth = findStat(data, [/revenue growth/, /sales growth/]);
   const pe = findStat(data, [/price.*earnings/, /^p\/e/, /^per/]);
   const pbv = findStat(data, [/price.*book/, /^p\/b/, /^pbv/]);
-  const fundamentalStats = [roe, margin, debt, revenueGrowth].filter(Boolean) as NonNullable<typeof roe>[];
-  let fScore = 50;
-  if (roe?.value !== null && roe) fScore += clamp(roe.value, -10, 30) * 0.6;
-  if (margin?.value !== null && margin) fScore += clamp(margin.value, -10, 25) * 0.35;
-  if (debt?.value !== null && debt) fScore -= Math.max(0, debt.value - 1) * 8;
-  if (revenueGrowth?.value !== null && revenueGrowth) fScore += clamp(revenueGrowth.value, -20, 30) * 0.4;
-  const fundamental = fundamentalStats.length ? {
-    key: 'fundamental' as const, label: 'Fundamental', weight: 20, score: Math.round(clamp(fScore)), available: true,
-    metrics: fundamentalStats.map((x) => metric(x.name, x.name, x.raw, 'neutral', 'Nilai terbaru dari Key Statistics Stockbit.')),
-  } : unavailable('fundamental', 'Fundamental', 20);
-
-  const valuationStats = [pe, pbv].filter(Boolean) as NonNullable<typeof pe>[];
-  let vScore = 50;
-  if (pe?.value !== null && pe) vScore += pe.value > 0 && pe.value <= 15 ? 12 : pe.value > 30 ? -12 : 0;
-  if (pbv?.value !== null && pbv) vScore += pbv.value > 0 && pbv.value <= 2 ? 8 : pbv.value > 5 ? -8 : 0;
-  const valuation = valuationStats.length ? {
-    key: 'valuation' as const, label: 'Valuasi', weight: 10, score: Math.round(clamp(vScore)), available: true,
-    metrics: valuationStats.map((x) => metric(x.name, x.name, x.raw, 'neutral', 'Valuasi absolut; perbandingan sektor tetap diperlukan.')),
-  } : unavailable('valuation', 'Valuasi', 10);
+  const peers = context.peers ?? [], cutoff = context.cutoff ?? new Date(0).toISOString();
+  const relative = (name: 'roe'|'netMargin'|'revenueGrowth'|'debtToEquity'|'per'|'pbv', value: number | null | undefined, lower = false) => sectorRelativeMetric({ symbol: context.symbol ?? '', metric: name, value: value ?? null, sector: context.sector, subsector: context.subsector, compatibleIndustry: sectorFamily(context.sector), cutoff, peers, lowerIsBetter: lower });
+  const roeRel = relative('roe', roe?.value), marginRel = relative('netMargin', margin?.value), growthRel = relative('revenueGrowth', revenueGrowth?.value);
+  // DER is deliberately not interpreted for financials; banks require a
+  // capital-quality metric (CAR/NPL) that this feed does not currently expose.
+  const debtRel = sectorFamily(context.sector) === 'financials' ? null : relative('debtToEquity', debt?.value, true);
+  const qualityScores = [roeRel, marginRel, growthRel, debtRel].filter((x): x is NonNullable<typeof x> => Boolean(x?.available));
+  const fScore = qualityScores.length >= 2 ? qualityScores.reduce((s,x)=>s+(x.score ?? 0),0)/qualityScores.length : null;
+  const fundamental: AnalysisComponent = {
+    key: 'fundamental', label: 'Kualitas Perusahaan (Sector-relative)', weight: 20, score: fScore === null ? null : Math.round(fScore), available: fScore !== null,
+    role: 'risk_modifier', horizon: 'context_only', sampleSize: qualityScores.length ? Math.min(...qualityScores.map(x=>x.peerSampleSize)) : 0, benchmarkScope: qualityScores[0]?.benchmarkScope ?? null,
+    methodologyVersion: SECTOR_PEER_POLICY.version, warnings: [...qualityScores.flatMap(x=>x.warnings), ...(sectorFamily(context.sector)==='financials' && debt ? ['DER bank tidak dinilai dengan interpretasi perusahaan non-keuangan.'] : [])],
+    metrics: [roe, margin, debt, revenueGrowth].filter(Boolean).map((x) => metric(x!.name, x!.name, x!.raw, 'neutral', 'Raw value; skor hanya berasal dari peer point-in-time yang memenuhi minimum sample.')),
+  };
+  const perRel = relative('per', pe?.value, true), pbvRel = relative('pbv', pbv?.value, true), valuationScores = [perRel, pbvRel].filter(x=>x.available);
+  const vScore = valuationScores.length >= 1 ? valuationScores.reduce((s,x)=>s+(x.score ?? 0),0)/valuationScores.length : null;
+  const valuation: AnalysisComponent = {
+    key: 'valuation', label: 'Valuasi Sector-relative', weight: 10, score: vScore === null ? null : Math.round(vScore), available: vScore !== null,
+    role: 'informational', horizon: 'context_only', sampleSize: valuationScores.length ? Math.min(...valuationScores.map(x=>x.peerSampleSize)) : 0, benchmarkScope: valuationScores[0]?.benchmarkScope ?? null,
+    methodologyVersion: SECTOR_PEER_POLICY.version, warnings: [...perRel.warnings, ...pbvRel.warnings],
+    metrics: [pe, pbv].filter(Boolean).map((x) => metric(x!.name, x!.name, x!.raw, x === pe && (x!.value ?? 1) <= 0 ? 'negative' : 'neutral', x === pe && (x!.value ?? 1) <= 0 ? 'PER negatif menandakan earnings negatif dan tidak dianggap murah.' : 'Raw value; konteks beli tidak diturunkan dari valuasi saja.')),
+  };
   return [fundamental, valuation];
 }
 
@@ -195,6 +172,12 @@ export function buildComprehensiveAnalysis(input: {
   catalyst?: { matriks_story?: Array<{ potensi_dampak_harga?: string }>; kesimpulan?: string; swot_analysis?: { ai_scoring?: AiStoryScoring }; created_at?: string } | null;
   now?: Date;
   sourceTimestamps?: Partial<Record<FreshnessSource, string | null>>;
+  sector?: string | null;
+  subsector?: string | null;
+  peerSnapshot?: PeerObservation[];
+  informationCutoffAt?: string;
+  ara?: number | null;
+  arb?: number | null;
 }): ComprehensiveAnalysis {
   const now = input.now ?? new Date();
   const regime = calculateMarketRegime(input.benchmarkHistory ?? []);
@@ -221,8 +204,8 @@ export function buildComprehensiveAnalysis(input: {
   const rawComponents: AnalysisComponent[] = [
     brokerFlowComponent(input.brokerSummary, input.brokerHistory),
     technicalComponent(input.history ?? []),
-    ...fundamentalComponents(input.keyStats),
-    liquidityComponent(input.orderbook, input.lastPrice),
+    ...fundamentalComponents(input.keyStats, { sector: input.sector, subsector: input.subsector, peers: input.peerSnapshot, cutoff: input.informationCutoffAt ?? now.toISOString() }),
+    liquidityComponent(input.orderbook, input.lastPrice, input.history ?? [], input.sourceTimestamps?.orderbook ?? input.orderbook?.observedAt ?? now.toISOString(), now, input.ara, input.arb),
     catalystComponent,
     marketComponent,
   ];
@@ -266,7 +249,7 @@ export function buildComprehensiveAnalysis(input: {
   const label: ComprehensiveAnalysis['label'] = score >= 75 ? 'Kuat' : score >= 60 ? 'Positif' : score >= 45 ? 'Netral' : score >= 30 ? 'Hati-hati' : 'Lemah';
   const missing = components.filter((x) => !x.available).map((x) => x.label);
   return {
-    score, dataCompleteness, confidence, agreement, quality, methodologyVersion: ANALYSIS_QUALITY_VERSION, label, horizon: 'Swing 5–20 hari', generatedAt: now.toISOString(), components,
+    score, dataCompleteness, confidence, agreement, quality, methodologyVersion: `${ANALYSIS_QUALITY_VERSION}+${ACTIVE_STRATEGY_PROFILE.version}`, label, horizon: 'Swing 5–20 hari', generatedAt: now.toISOString(), components,
     warnings: [...(missing.length ? [`Komponen belum tersedia dan tidak dihitung: ${missing.join(', ')}.`] : []), ...quality.warnings],
   };
 }

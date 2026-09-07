@@ -1,14 +1,15 @@
 import { ANALYSIS_QUALITY_VERSION } from './analysis-quality';
 import { DEFAULT_BACKTEST_CONFIG } from './backtest';
 import type { CalibrationContext, MarketRegime } from './probability-calibration';
-export const ACTIVE_MODEL_VERSION = 'multifactor-regime-rs-v6';
-export const ACTIVE_RANKING_MODEL_VERSION = 'eligible-ranking-v1';
-export const ACTIVE_ELIGIBILITY_CONFIG_VERSION = 'eligibility-v1';
+export const ACTIVE_MODEL_VERSION = 'multifactor-swing-v7';
+export const ACTIVE_RANKING_MODEL_VERSION = 'eligible-ranking-swing-v2';
+export const ACTIVE_ELIGIBILITY_CONFIG_VERSION = 'eligibility-execution-v2';
 const LEGACY_RANKING_MODEL_VERSIONS = [
   'multifactor-ai-v2',
   'multifactor-regime-rs-v3',
   'multifactor-decision-v4',
   'multifactor-quality-v5',
+  'multifactor-regime-rs-v6',
 ] as const;
 
 export function isSupportedRankingModelVersion(value: unknown): value is string {

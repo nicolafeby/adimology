@@ -108,6 +108,10 @@ export interface OrderbookLevel {
 export interface OrderbookSnapshot {
   bid: OrderbookLevel[];
   offer: OrderbookLevel[];
+  /** ISO timestamp when the provider snapshot was observed. */
+  observedAt?: string | null;
+  /** Unit is always shares internally; adapters must convert provider lots. */
+  volumeUnit?: 'shares';
 }
 
 export interface AnalysisMetric {
@@ -187,6 +191,18 @@ export interface AnalysisComponent {
   freshness?: FreshnessAssessment;
   reliability?: ReliabilityAssessment;
   metrics: AnalysisMetric[];
+  role?: import('./screener-factor-config').FactorRole;
+  horizon?: import('./screener-factor-config').FactorHorizon;
+  rawValue?: unknown;
+  normalizedScore?: number | null;
+  contribution?: number;
+  sampleSize?: number | null;
+  benchmarkScope?: string | null;
+  pointInTimeValid?: boolean;
+  explanation?: string;
+  warnings?: string[];
+  methodologyVersion?: string;
+  execution?: import('./screener-factors').ExecutionAssessment;
   /** Stored inside the existing components JSON for schema-compatible persistence. */
   marketContext?: { regime: MarketRegimeAnalysis; relativeStrength: RelativeStrengthAnalysis; gate: MarketGateAudit };
 }

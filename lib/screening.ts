@@ -9,7 +9,7 @@ export type RuleSeverity = 'hard_gate' | 'confirmation' | 'informational';
 export interface EligibilityRule { key: string; label: string; category: string; severity: RuleSeverity; passed: boolean; actualValue: unknown; requiredValue: unknown; explanation: string }
 
 /** Baseline heuristic v1. Percent values are percentage points; liquidity is IDR/day. */
-export const SCREENER_ELIGIBILITY_CONFIG = Object.freeze({ version: 'eligibility-v1', minimumCompletenessPercent: 60, minimumConfidencePercent: 45, minimumAverageTradedValueIdr: 1_000_000_000, maximumSpreadPercent: 3, maximumAtrPercent: 8, minimumRelativeVolume: 1.2, minimumBrokerFlowScore: 60, minimumSignalAgreementPercent: 60, minimumRiskReward: 1, minimumConfirmations: 4 } as const);
+export const SCREENER_ELIGIBILITY_CONFIG = Object.freeze({ version: 'eligibility-execution-v2', minimumCompletenessPercent: 60, minimumConfidencePercent: 45, minimumAverageTradedValueIdr: 1_000_000_000, maximumSpreadPercent: 3, maximumAtrPercent: 8, minimumRelativeVolume: 1.2, minimumBrokerFlowScore: 60, minimumSignalAgreementPercent: 60, minimumRiskReward: 1, minimumConfirmations: 4 } as const);
 
 export interface EligibilityInput {
   processingError?: string | null; analysisValid: boolean; preScreenPassed: boolean; completeness: number | null; confidence: number | null;
@@ -17,6 +17,9 @@ export interface EligibilityInput {
   dominantDirection: 'bullish' | 'neutral' | 'bearish' | 'unavailable' | null; hasHighSeverityConflict: boolean; signal: TrendSignal | null; marketGateAvoid: boolean;
   aboveSma20: boolean | null; return5d: number | null; relativeVolume: number | null; brokerFlowScore: number | null; relativeStrength20d: number | null;
   signalAgreement: number | null; riskReward: number | null;
+  executionStatus?: 'acceptable' | 'high_impact' | 'insufficient_depth' | 'invalid_book' | 'stale' | null;
+  /** Outside an active session execution is provisional and must be refreshed. */
+  executionDeferred?: boolean;
 }
 export interface EligibilityResult { status: EligibilityStatus; screeningStatus: ScreeningStatus; rules: EligibilityRule[]; hardFailures: EligibilityRule[]; warnings: EligibilityRule[] }
 const makeRule = (key: string, label: string, category: string, severity: RuleSeverity, passed: boolean, actualValue: unknown, requiredValue: unknown, explanation: string): EligibilityRule => ({ key, label, category, severity, passed, actualValue, requiredValue, explanation });
@@ -33,6 +36,7 @@ export function evaluateEligibility(input: EligibilityInput): EligibilityResult 
     makeRule('critical_data', 'Data kritis tersedia dan segar', 'freshness', 'hard_gate', input.criticalDataAvailable && !input.criticalDataStale, { available: input.criticalDataAvailable, stale: input.criticalDataStale }, { available: true, stale: false }, 'Harga, histori, dan data eksekusi kritis tidak boleh unavailable atau stale.'),
     makeRule('minimum_liquidity', 'Likuiditas minimum', 'liquidity', 'hard_gate', input.averageTradedValue !== null && input.averageTradedValue >= c.minimumAverageTradedValueIdr, input.averageTradedValue, `>= Rp ${c.minimumAverageTradedValueIdr}`, 'Rata-rata nilai transaksi 20 hari harus memenuhi baseline.'),
     makeRule('maximum_spread', 'Spread maksimum', 'execution', 'hard_gate', input.spreadPercent !== null && input.spreadPercent <= c.maximumSpreadPercent, input.spreadPercent, `<= ${c.maximumSpreadPercent}%`, 'Spread unavailable atau terlalu lebar adalah hard failure.'),
+    makeRule('execution_scenario', 'Skenario eksekusi referensi', 'execution', input.executionDeferred ? 'confirmation' : 'hard_gate', input.executionDeferred ? false : input.executionStatus === undefined ? true : input.executionStatus === 'acceptable', input.executionDeferred ? 'requires_market_open_refresh' : input.executionStatus ?? 'legacy_not_evaluated', 'acceptable', input.executionDeferred ? 'Pasar tidak aktif; execution harus divalidasi ulang dan hasil tidak boleh final passed.' : 'Depth dua sisi, slippage, dan participation skenario referensi harus dapat diterima.'),
     makeRule('maximum_volatility', 'Volatilitas maksimum', 'risk', 'hard_gate', input.atrPercent !== null && input.atrPercent <= c.maximumAtrPercent, input.atrPercent, `<= ${c.maximumAtrPercent}% ATR`, 'ATR unavailable atau terlalu tinggi tidak memenuhi batas risiko.'),
     makeRule('dominant_direction', 'Tanpa arah bearish dominan', 'conflict', 'hard_gate', input.dominantDirection !== 'bearish' && input.dominantDirection !== 'unavailable' && input.dominantDirection !== null, input.dominantDirection, 'bullish atau neutral', 'Arah bearish atau unavailable menggagalkan eligibility.'),
     makeRule('high_severity_conflict', 'Tanpa konflik berat', 'conflict', 'hard_gate', !input.hasHighSeverityConflict, input.hasHighSeverityConflict, false, 'Konflik severity tinggi menggagalkan eligibility.'),
@@ -48,6 +52,7 @@ export function evaluateEligibility(input: EligibilityInput): EligibilityResult 
   ];
   const hardFailures = rules.filter((r) => r.severity === 'hard_gate' && !r.passed), warnings = rules.filter((r) => r.severity === 'confirmation' && !r.passed);
   if (hardFailures.length) return { status: 'ineligible', screeningStatus: 'rejected', rules, hardFailures, warnings };
+  if (input.executionDeferred) return { status: 'needs_confirmation', screeningStatus: 'watch', rules, hardFailures, warnings };
   if (rules.filter((r) => r.severity === 'confirmation' && r.passed).length < c.minimumConfirmations) return { status: 'needs_confirmation', screeningStatus: 'watch', rules, hardFailures, warnings };
   return { status: 'eligible', screeningStatus: 'passed', rules, hardFailures, warnings };
 }

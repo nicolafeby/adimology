@@ -16,6 +16,13 @@ test('confirmation shortage is watch while complete eligibility passes determini
   assert.deepEqual(evaluateEligibility(eligible), evaluateEligibility(eligible));
   assert.equal(evaluateEligibility(eligible).screeningStatus, 'passed');
 });
+
+test('closed-market execution is deferred to watch instead of hard rejection', () => {
+  const result = evaluateEligibility({ ...eligible, executionStatus: 'stale', executionDeferred: true });
+  assert.equal(result.screeningStatus, 'watch');
+  assert.equal(result.status, 'needs_confirmation');
+  assert.equal(result.rules.find((rule) => rule.key === 'execution_scenario')?.severity, 'confirmation');
+});
 test('ranking ignores insufficient probability instead of substituting zero', () => {
   const base = { momentumScore: 80, relativeStrength20d: 4, brokerFlowScore: 70, liquidityScore: 80, signalAgreement: 75, confidence: 80 };
   const missing = calculateRankingScore({ ...base, probability: null });

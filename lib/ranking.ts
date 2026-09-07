@@ -63,6 +63,8 @@ export function classifyTrend(analysis: ComprehensiveAnalysis): { signal: TrendS
   const atr = metricNumber(analysis.components, 'atr');
   const broker = analysis.components.find((item) => item.key === 'brokerFlow')?.score ?? null;
   const liquidity = analysis.components.find((item) => item.key === 'liquidity')?.score ?? null;
+  const technical = analysis.components.find((item) => item.key === 'technical');
+  const coreDirectionalAvailable = Boolean(technical?.available && (technical.coverage ?? 0) >= 60);
   const reasons: RankingReason[] = [];
   if (r5 !== null) reasons.push({ label: 'Momentum 5 hari', value: `${r5.toFixed(1)}%`, positive: r5 > 0 });
   if (volume !== null) reasons.push({ label: 'Relative volume', value: `${volume.toFixed(2)}x`, positive: volume >= 1.2 });
@@ -75,7 +77,7 @@ export function classifyTrend(analysis: ComprehensiveAnalysis): { signal: TrendS
   if (analysis.confidence < RANKING_QUALITY_THRESHOLDS.minimumConfidence) riskFlags.push('Confidence analisis rendah');
   for (const conflict of analysis.quality?.conflicts ?? []) if (conflict.severity === 'high') riskFlags.push(conflict.message);
   let signal: TrendSignal = 'watch';
-  if (analysis.quality?.dominantDirection === 'bearish' || analysis.dataCompleteness < RANKING_QUALITY_THRESHOLDS.minimumCompleteness || analysis.score < 45 || riskFlags.length >= 2) signal = 'avoid';
+  if (!coreDirectionalAvailable || analysis.quality?.dominantDirection === 'bearish' || analysis.score < 45) signal = 'avoid';
   else if (analysis.score >= 70 && analysis.confidence >= RANKING_QUALITY_THRESHOLDS.confirmedConfidence && !(analysis.quality?.conflicts.some((conflict) => conflict.severity === 'high')) && (volume ?? 0) >= 1.2 && (broker ?? 0) >= 60) signal = 'confirmed_uptrend';
   else if (analysis.score >= 60 && (r5 ?? 0) > 0) signal = 'early_uptrend';
   return { signal, reasons: reasons.slice(0, 4), riskFlags };
@@ -106,10 +108,10 @@ export function diagnosticPriorityScore(analysis: ComprehensiveAnalysis, probabi
   return probability === null ? analysis.score : analysis.score * 0.7 + probability * 100 * 0.3;
 }
 
-export const RANKING_MODEL_CONFIG = Object.freeze({ version: 'eligible-ranking-v1', minimumProbabilitySampleSize: 50, weights: { momentum: 25, relativeStrength: 20, brokerFlow: 15, liquidity: 15, signalAgreement: 10, confidence: 10, calibratedProbability: 5 } } as const);
-export interface RankingFactor { key: string; rawValue: number | null; normalizedScore: number | null; weight: number; contribution: number; available: boolean; explanation?: string }
-export interface RankingInput { momentumScore: number | null; relativeStrength20d: number | null; brokerFlowScore: number | null; liquidityScore: number | null; signalAgreement: number | null; confidence: number | null; probability: CalibratedProbability | null }
-export interface RankingResult { score: number; factors: RankingFactor[]; availableWeight: number }
+export const RANKING_MODEL_CONFIG = Object.freeze({ version: 'eligible-ranking-swing-v2', strategyProfile: 'swing_5_20d', minimumProbabilitySampleSize: 50, weights: { momentum: 15, relativeStrength: 25, brokerFlow: 25, signalAgreement: 15, confidence: 10, calibratedProbability: 10 } } as const);
+export interface RankingFactor { key: string; label?: string; role?: 'ranking_factor' | 'risk_modifier' | 'informational'; horizon?: 'short_term' | 'swing' | 'context_only'; rawValue: number | null; normalizedScore: number | null; weight: number; contribution: number; available: boolean; sampleSize?: number | null; benchmarkScope?: string | null; freshness?: string | null; pointInTimeValid?: boolean; warnings?: string[]; methodologyVersion?: string; explanation?: string }
+export interface RankingInput { momentumScore: number | null; relativeStrength20d: number | null; brokerFlowScore: number | null; /** @deprecated Execution is an eligibility gate in v2. */ liquidityScore: number | null; signalAgreement: number | null; confidence: number | null; probability: CalibratedProbability | null }
+export interface RankingResult { score: number; factors: RankingFactor[]; availableWeight: number; missingWeight: number; coverage: number; strategyProfile: 'swing_5_20d' }
 const clamp = (value: number) => Math.max(0, Math.min(100, value));
 
 /** Pure core ranking. Missing factors are excluded and a coverage penalty prevents sparse-data advantage. */
@@ -119,15 +121,14 @@ export function calculateRankingScore(input: RankingInput): RankingResult {
     ['momentum', input.momentumScore, RANKING_MODEL_CONFIG.weights.momentum, (v: number) => clamp(v)],
     ['relative_strength', input.relativeStrength20d, RANKING_MODEL_CONFIG.weights.relativeStrength, (v: number) => clamp(50 + v * 5)],
     ['broker_flow', input.brokerFlowScore, RANKING_MODEL_CONFIG.weights.brokerFlow, (v: number) => clamp(v)],
-    ['liquidity_execution', input.liquidityScore, RANKING_MODEL_CONFIG.weights.liquidity, (v: number) => clamp(v)],
     ['signal_agreement', input.signalAgreement, RANKING_MODEL_CONFIG.weights.signalAgreement, (v: number) => clamp(v)],
     ['confidence', input.confidence, RANKING_MODEL_CONFIG.weights.confidence, (v: number) => clamp(v)],
     ['calibrated_probability', probabilityValid ? input.probability!.probability! * 100 : null, RANKING_MODEL_CONFIG.weights.calibratedProbability, (v: number) => clamp(v)],
   ] as const;
-  const factors: RankingFactor[] = specs.map(([key, rawValue, weight, normalize]) => { const available = typeof rawValue === 'number' && Number.isFinite(rawValue); const normalizedScore = available ? normalize(rawValue) : null; return { key, rawValue: available ? rawValue : null, normalizedScore, weight, contribution: normalizedScore === null ? 0 : normalizedScore * weight / 100, available, explanation: key === 'calibrated_probability' && !available ? 'Dikeluarkan: calibration insufficient/incompatible; tidak diganti nol.' : undefined }; });
+  const factors: RankingFactor[] = specs.map(([key, rawValue, weight, normalize]) => { const available = typeof rawValue === 'number' && Number.isFinite(rawValue); const normalizedScore = available ? normalize(rawValue) : null; return { key, role: 'ranking_factor', horizon: key === 'momentum' ? 'short_term' : key === 'confidence' || key === 'signal_agreement' ? 'context_only' : 'swing', rawValue: available ? rawValue : null, normalizedScore, weight, contribution: normalizedScore === null ? 0 : normalizedScore * weight / 100, available, methodologyVersion: RANKING_MODEL_CONFIG.version, warnings: [], explanation: key === 'calibrated_probability' && !available ? 'Dikeluarkan: calibration insufficient/incompatible; tidak diganti nol.' : undefined }; });
   const availableWeight = factors.filter((f) => f.available).reduce((sum, f) => sum + f.weight, 0);
   const normalized = availableWeight ? factors.reduce((sum, f) => sum + f.contribution, 0) * 100 / availableWeight : 0;
   const coveragePenalty = availableWeight / 100;
   const score = Math.round(clamp(normalized * coveragePenalty) * 100) / 100;
-  return { score: Number.isFinite(score) ? score : 0, factors, availableWeight };
+  return { score: Number.isFinite(score) ? score : 0, factors, availableWeight, missingWeight: 100 - availableWeight, coverage: availableWeight, strategyProfile: 'swing_5_20d' };
 }

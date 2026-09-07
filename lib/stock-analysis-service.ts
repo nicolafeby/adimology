@@ -39,8 +39,10 @@ export async function analyzeSymbol(symbol: string, analysisDate: string, benchm
   const raw = orderbookResponse.data || (orderbookResponse as never);
   const ob = raw as typeof orderbookResponse.data;
   if (!ob?.total_bid_offer || ob.close === undefined) throw new Error('Struktur orderbook tidak valid');
-  const toLevel = (row: { price: string; volume: string; que_num: string; change_percentage: string }) => ({ price: Number(row.price), volume: parseLot(row.volume), queues: parseLot(row.que_num), changePercentage: Number(row.change_percentage || 0) });
-  const orderbook = { bid: (ob.bid ?? []).slice(0, 10).map(toLevel), offer: (ob.offer ?? []).slice(0, 10).map(toLevel) };
+  // Stockbit's orderbook volume is expressed in lots. Internally all depth is
+  // normalized to shares so notional/slippage calculations cannot mix units.
+  const toLevel = (row: { price: string; volume: string; que_num: string; change_percentage: string }) => ({ price: Number(row.price), volume: parseLot(row.volume) * 100, queues: parseLot(row.que_num), changePercentage: Number(row.change_percentage || 0) });
+  const orderbook = { bid: (ob.bid ?? []).slice(0, 10).map(toLevel), offer: (ob.offer ?? []).slice(0, 10).map(toLevel), observedAt: fetchedAt, volumeUnit: 'shares' as const };
   const lastPrice = Number(ob.close);
   // The top-buyer list can be empty even when price/orderbook/technical feeds are
   // valid. Keep legacy target fields safe without dropping the stock entirely.
@@ -57,8 +59,12 @@ export async function analyzeSymbol(symbol: string, analysisDate: string, benchm
   const asOfHistory = filterCompletedDailyCandles(history, context);
   const asOfMarket = filterCompletedDailyCandles(fetchedBenchmark, context);
   const asOfSector = benchmarks.sectorHistory ? filterCompletedDailyCandles(benchmarks.sectorHistory, context) : undefined;
-  const historyLast = asOfHistory.at(-1)?.date ?? null;
-  const benchmarkLast = asOfMarket.at(-1)?.date ?? null;
+  // Provider ordering is not part of its contract. Never use `at(-1)` as a
+  // freshness timestamp without sorting, otherwise the oldest candle can make
+  // every symbol look stale.
+  const latestDate = (rows: HistoricalSummaryItem[]) => rows.reduce<string | null>((latest, row) => !latest || row.date > latest ? row.date : latest, null);
+  const historyLast = latestDate(asOfHistory);
+  const benchmarkLast = latestDate(asOfMarket);
   const sourceProvenance: SourceProvenance[] = [
     makeSource('historical_price', { observedAt: historyLast ? completedDailyCandleAvailableAt(historyLast) : null, effectiveAt: historyLast ? `${historyLast}T16:00:00+07:00` : null, availableAt: historyLast ? completedDailyCandleAvailableAt(historyLast) : null, isHistoricalSnapshot: true }),
     makeSource('benchmark', { symbol: 'COMPOSITE', observedAt: benchmarkLast ? completedDailyCandleAvailableAt(benchmarkLast) : null, effectiveAt: benchmarkLast ? `${benchmarkLast}T16:00:00+07:00` : null, availableAt: benchmarkLast ? completedDailyCandleAvailableAt(benchmarkLast) : null, isHistoricalSnapshot: true }),
@@ -71,7 +77,7 @@ export async function analyzeSymbol(symbol: string, analysisDate: string, benchm
   const valid = (type: SourceProvenance['dataType']) => sourceProvenance.find((item) => item.dataType === type)?.temporalValidity === 'valid';
   const marketRegime = calculateMarketRegime(asOfMarket);
   const relativeStrength = calculateRelativeStrength(asOfHistory, asOfMarket, asOfSector);
-  const analysis = buildComprehensiveAnalysis({ brokerSummary: valid('broker_summary') ? brokerSummary : undefined, orderbook: valid('orderbook') ? orderbook : undefined, lastPrice, history: valid('historical_price') ? asOfHistory : [], keyStats: valid('fundamental') ? keyStats : undefined, benchmarkHistory: valid('benchmark') ? asOfMarket : [], brokerHistory, catalyst: valid('ai_story') ? catalyst : null, sourceTimestamps: { orderbook: fetchedAt, marketPrice: fetchedAt, brokerSummary: fetchedAt, historicalPrice: historyLast ? completedDailyCandleAvailableAt(historyLast) : null, benchmark: benchmarkLast ? completedDailyCandleAvailableAt(benchmarkLast) : null } });
+  const analysis = buildComprehensiveAnalysis({ brokerSummary: valid('broker_summary') ? brokerSummary : undefined, orderbook: valid('orderbook') ? orderbook : undefined, lastPrice, history: valid('historical_price') ? asOfHistory : [], keyStats: valid('fundamental') ? keyStats : undefined, benchmarkHistory: valid('benchmark') ? asOfMarket : [], brokerHistory, sector: info?.data?.sector, ara, arb, catalyst: valid('ai_story') ? catalyst : null, sourceTimestamps: { orderbook: fetchedAt, marketPrice: fetchedAt, brokerSummary: fetchedAt, historicalPrice: historyLast ? completedDailyCandleAvailableAt(historyLast) : null, benchmark: benchmarkLast ? completedDailyCandleAvailableAt(benchmarkLast) : null } });
   analysis.marketRegime = marketRegime;
   analysis.relativeStrength = relativeStrength;
   return { symbol: emiten, sector: info?.data?.sector, brokerData, brokerSummary, orderbook, history: asOfHistory, lastPrice, ara, arb, totalBid, totalOffer, targets, analysis, catalyst, marketRegime, relativeStrength, pointInTimeContext: context, sourceProvenance };

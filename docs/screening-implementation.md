@@ -89,7 +89,7 @@ Bukti baca-saja: [`screening-data-audit.json`](screening-data-audit.json), diamb
 
 ## File dan migration
 
-Perubahan utama: `app/rankings/page.tsx`, `app/rankings/screening.css`, `RankingDetailModal.tsx`, `DecisionCard.tsx`, `ScreeningNews.tsx`; API screener/rankings/backtest; registry/calendar/screening/backtest/news; service, persistence, point-in-time, analysis quality dan provider transport; background jobs lokal/Netlify; tests dan scripts pemeriksaan.
+Perubahan utama: `app/rankings/page.tsx`, `app/rankings/screening.css`, `DecisionCard.tsx`, `ScreeningNews.tsx`; API screener/rankings/backtest; registry/calendar/screening/backtest/news; service, persistence, point-in-time, analysis quality dan provider transport; background jobs lokal/Netlify; tests dan scripts pemeriksaan.
 
 Migration baru:
 

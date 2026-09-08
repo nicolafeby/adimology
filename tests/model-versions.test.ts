@@ -4,7 +4,7 @@ import { ACTIVE_MODEL_VERSION, isSupportedRankingModelVersion, rankingModelBadge
 
 test('active ranking model remains readable and receives a current badge', () => {
   assert.equal(isSupportedRankingModelVersion(ACTIVE_MODEL_VERSION), true);
-  assert.equal(rankingModelBadge(ACTIVE_MODEL_VERSION), 'Regime + RS · v7');
+  assert.equal(rankingModelBadge(ACTIVE_MODEL_VERSION), 'Regime + RS · v8');
 });
 
 test('legacy ranking snapshots remain readable but unknown models are rejected', () => {

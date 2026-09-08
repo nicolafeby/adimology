@@ -1,7 +1,6 @@
-import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
 
-const SESSION_NAME = 'adimology_session';
+export const SESSION_NAME = 'adimology_session';
 const SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 hours
 
 // Use AUTH_SECRET from env or fallback for dev (Warning during production)
@@ -49,10 +48,21 @@ export async function createSessionToken(payload: any): Promise<string> {
   return `${header}.${body}.${signatureBase64}`;
 }
 
+/** Decode exactly as NextRequest.cookies does, including percent-encoded JWT padding. */
+export function sessionTokenFromRequest(request: Request): string | null {
+  const entry = request.headers.get('cookie')?.split(';').map(part => part.trim()).find(part => part.startsWith(`${SESSION_NAME}=`));
+  if (!entry) return null;
+  try { return decodeURIComponent(entry.slice(SESSION_NAME.length + 1)) || null; }
+  catch { return null; }
+}
+
 export async function verifySessionToken(token: string): Promise<any | null> {
   try {
-    const [header, body, signature] = token.split('.');
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const [header, body, signature] = parts;
     if (!header || !body || !signature) return null;
+    if (JSON.parse(atob(header)).alg !== 'HS256') return null;
 
     const key = await getCryptoKey();
     const encoder = new TextEncoder();
@@ -70,7 +80,7 @@ export async function verifySessionToken(token: string): Promise<any | null> {
     if (!isValid) return null;
 
     const payload = JSON.parse(atob(body));
-    if (payload.exp < Date.now()) return null;
+    if (!payload || payload.authenticated !== true || typeof payload.exp !== 'number' || !Number.isFinite(payload.exp) || payload.exp <= Date.now()) return null;
 
     return payload;
   } catch (error) {
@@ -99,8 +109,7 @@ export async function setSession(response: NextResponse, verified: boolean = tru
  * Check if the request has a valid session
  */
 export async function getSession(req: NextRequest | Request) {
-  const cookieStore = cookies();
-  const token = (await cookieStore).get(SESSION_NAME)?.value;
+  const token = sessionTokenFromRequest(req);
   
   if (!token) return null;
   return await verifySessionToken(token);

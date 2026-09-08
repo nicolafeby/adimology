@@ -1,0 +1,52 @@
+{
+  "generatedAt": "2026-09-08T14:20:37.791Z",
+  "baseURL": "http://localhost:3100",
+  "mode": "deterministic_mock_api",
+  "providerIntegration": "not_tested",
+  "reports": [
+    {
+      "name": "one unified table renders multiple strategy badges and priority order",
+      "status": "passed",
+      "durationMs": 684
+    },
+    {
+      "name": "window status, partial data, missing fields and rule reasons are explicit",
+      "status": "passed",
+      "durationMs": 114
+    },
+    {
+      "name": "strategy and ticker filters only filter the same table",
+      "status": "passed",
+      "durationMs": 53
+    },
+    {
+      "name": "manual run submits one pipeline request",
+      "status": "passed",
+      "durationMs": 61
+    },
+    {
+      "name": "safe error and retry state recover without exposing raw payload",
+      "status": "passed",
+      "durationMs": 132
+    },
+    {
+      "name": "running snapshot polls until terminal and then stops",
+      "status": "passed",
+      "durationMs": 6469
+    },
+    {
+      "name": "desktop and mobile layouts avoid page-level horizontal overflow",
+      "status": "passed",
+      "durationMs": 459
+    }
+  ],
+  "browserErrors": [],
+  "unifiedRunRequests": [
+    {
+      "universeLimit": 1000,
+      "deepLimit": 100,
+      "aiLimit": 0,
+      "concurrency": 4
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "generatedAt": "2026-09-07T23:48:40.025Z",
+  "baseURL": "http://127.0.0.1:3000",
+  "results": [
+    {
+      "name": "Real encoded verified cookie passes auth and reaches input validation",
+      "status": "passed",
+      "mode": "real_local_api_no_database_mutation"
+    },
+    {
+      "name": "Real encoded guest cookie passes auth and reaches input validation",
+      "status": "passed",
+      "mode": "real_local_api_no_database_mutation"
+    },
+    {
+      "name": "Unauthenticated request remains rejected",
+      "status": "passed",
+      "mode": "real_local_api"
+    },
+    {
+      "name": "401 opens login and successful reauthentication restores BPJS",
+      "status": "passed",
+      "mode": "browser_with_mock_auth_api"
+    },
+    {
+      "name": "Security status http_failure fails closed and retry recovers",
+      "status": "passed",
+      "mode": "browser_with_mock_auth_api"
+    },
+    {
+      "name": "Security status invalid_success_payload fails closed and retry recovers",
+      "status": "passed",
+      "mode": "browser_with_mock_auth_api"
+    },
+    {
+      "name": "Stalled status request times out, stays locked, and retry recovers",
+      "status": "passed",
+      "mode": "browser_with_mock_auth_api"
+    },
+    {
+      "name": "Stalled password submission times out and can be retried",
+      "status": "passed",
+      "mode": "browser_with_mock_auth_api"
+    }
+  ],
+  "runtimeErrors": [],
+  "productionWrites": false
+}

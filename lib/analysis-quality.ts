@@ -1,6 +1,6 @@
 import type { AnalysisComponent, AnalysisQuality, FreshnessAssessment, FreshnessSource, ReliabilityAssessment, SignalAgreement, SignalConflict, SignalDirection } from './types';
 
-export const ANALYSIS_QUALITY_VERSION = 'quality-v1';
+export const ANALYSIS_QUALITY_VERSION = 'quality-v2';
 export const DIRECTION_THRESHOLDS = Object.freeze({ bullish: 65, bearish: 45 });
 export const AGREEMENT_THRESHOLDS = Object.freeze({ strong: 75, moderate: 55, mixed: 35, minimumComponents: 2 });
 export const CONFIDENCE_WEIGHTS = Object.freeze({ completeness: 0.30, agreement: 0.25, freshness: 0.20, reliability: 0.25 });
@@ -25,7 +25,7 @@ export function normalizeComponentDirection(score: number | null, hardNegative =
 }
 
 export function detectSignalConflicts(components: AnalysisComponent[], hardRiskFlags: string[] = []): SignalConflict[] {
-  const byKey = new Map(components.map((component) => [component.key, component]));
+  const byKey = new Map(components.filter(component => component.role !== 'informational' && component.weight > 0).map((component) => [component.key, component]));
   const conflicts: SignalConflict[] = [];
   const opposed = (a: AnalysisComponent['key'], b: AnalysisComponent['key'], key: string, message: string, severity: SignalConflict['severity'] = 'high') => {
     const left = byKey.get(a)?.direction, right = byKey.get(b)?.direction;
@@ -44,7 +44,7 @@ export function detectSignalConflicts(components: AnalysisComponent[], hardRiskF
 }
 
 export function calculateSignalAgreement(components: AnalysisComponent[], conflicts: SignalConflict[] = []): SignalAgreement {
-  const comparable = components.filter((component) => component.available && component.direction !== 'unavailable' && component.directionalValue !== null && Number.isFinite(component.directionalValue));
+  const comparable = components.filter((component) => component.role !== 'informational' && component.weight > 0 && component.available && component.direction !== 'unavailable' && component.directionalValue !== null && Number.isFinite(component.directionalValue));
   const effective = comparable.map((component) => ({ ...component, effectiveWeight: component.weight * clamp(component.coverage ?? 100) / 100 }));
   const total = effective.reduce((sum, component) => sum + component.effectiveWeight, 0);
   const weightFor = (direction: SignalDirection) => effective.filter((component) => component.direction === direction).reduce((sum, component) => sum + component.effectiveWeight, 0);
@@ -81,8 +81,8 @@ export function calculateReliability(input: { components: AnalysisComponent[]; h
   if (input.historySamples < 20) issues.push('Sampel harga historis kurang dari 20 sesi.');
   if (input.brokerHistorySamples < 5) issues.push('Sampel persistensi broker terbatas.');
   if (input.fallbackUsed) issues.push('Sebagian kalkulasi menggunakan fallback.');
-  const catalystQuality = input.catalystConfidence == null ? null : clamp(input.catalystConfidence);
-  const factors = [componentValidity, historyQuality, brokerQuality, ...(catalystQuality === null ? [] : [catalystQuality])];
+  // AI self-reported confidence is informational and cannot affect quantitative reliability.
+  const factors = [componentValidity, historyQuality, brokerQuality];
   return { score: round(factors.reduce((sum, value) => sum + value, 0) / factors.length), issues, fallbackUsed: Boolean(input.fallbackUsed), sampleSizes: { historicalPrice: input.historySamples, brokerHistory: input.brokerHistorySamples } };
 }
 
@@ -107,6 +107,7 @@ export function calculateAnalysisConfidence(input: { completeness: number; agree
 }
 
 export function buildAnalysisQuality(input: { components: AnalysisComponent[]; now: Date; freshness: FreshnessAssessment[]; historySamples: number; brokerHistorySamples: number; catalystConfidence?: number | null; hardRiskFlags?: string[]; fallbackUsed?: boolean; calibrationSampleSize?: number }): AnalysisQuality {
+  input = { ...input, components: input.components.filter(component => component.role !== 'informational' && component.weight > 0), freshness: input.freshness.filter(source => source.source !== 'catalyst') };
   const totalWeight = input.components.reduce((sum, component) => sum + component.weight, 0);
   const completeness = totalWeight ? round(input.components.reduce((sum, component) => sum + component.weight * clamp(component.coverage ?? (component.available ? 100 : 0)), 0) / totalWeight) : 0;
   const conflicts = detectSignalConflicts(input.components, input.hardRiskFlags);

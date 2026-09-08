@@ -193,7 +193,7 @@ async function getMigrationFiles() {
     sqlFiles.sort((a, b) => {
       const numA = parseInt(a.match(/^(\d+)/)?.[1] || '0');
       const numB = parseInt(b.match(/^(\d+)/)?.[1] || '0');
-      return numA - numB;
+      return numA - numB || a.localeCompare(b);
     });
     
     return sqlFiles;

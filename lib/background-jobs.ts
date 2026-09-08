@@ -1,5 +1,6 @@
+import { jakartaDate } from './point-in-time';
 import { generateAiStory } from './ai-story-service';
-import { runMarketScreener } from './screener-service';
+import { runUnifiedScreener } from './unified-screener-service';
 import {
   appendBackgroundJobLogEntry,
   createBackgroundJobLog,
@@ -67,12 +68,13 @@ export async function runScreenerBackgroundJob() {
     const log = await createBackgroundJobLog('analyze-watchlist', universeLimit);
     jobId = log.id;
 
-    const result = await runMarketScreener({ universeLimit, deepLimit, aiLimit, concurrency: 4, triggerSource: 'scheduled', idempotencyKey: `scheduled:${new Date().toISOString().slice(0, 10)}` });
+    const result = await runUnifiedScreener({ universeLimit, deepLimit, aiLimit, concurrency: 4, triggerSource: 'scheduled-unified', idempotencyKey: `scheduled:unified:${jakartaDate()}` });
     await updateBackgroundJobLog(log.id, {
       status: 'completed',
       success_count: result.progress.analyzed,
       error_count: result.progress.errors.length,
       metadata: {
+        strategy_id: 'unified',
         date: result.date,
         rankings: result.rankings.length,
         alerts_created: result.alertsCreated,

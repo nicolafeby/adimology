@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const storedHash = await getProfileSetting('password_hash');
+    const storedHash = await getProfileSetting('password_hash', true);
 
     if (!storedHash) {
       return NextResponse.json(
@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Error verifying password:', error);
     return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
+      { success: false, error: 'Pengaturan keamanan tidak dapat diproses. Coba lagi.' },
       { status: 500 }
     );
   }

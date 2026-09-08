@@ -67,6 +67,8 @@ export function classifyScreening(input: ScreeningClassifierInput) {
 }
 
 export interface ScreeningResult {
+  strategy_assessment?: import('./strategy-screening').StrategyScreeningAssessment;
+  strategy_id?: import('./strategies').StrategyId; strategy_version?: string; configuration_version?: string; execution_model?: string; outcome_definition?: string; strategy_support?: { level: import('./strategies').StrategySupportLevel; reasons: string[] }; news_enrichment?: import('./news').NewsEnrichment;
   symbol: string; analysis_date: string; screening_status: ScreeningStatus | null; eligibility_status?: EligibilityStatus; eligibility_rules?: EligibilityRule[];
   passed_rules: EligibilityRule[]; failed_rules: EligibilityRule[]; selection_stage: SelectionStage; data_quality: { completeness: number | null; confidence: number | null; valid: boolean };
   evaluated_at: string; run_id: string; analysis_score?: number | null; ranking_score?: number | null; ranking_position?: number | null;
@@ -74,8 +76,51 @@ export interface ScreeningResult {
   ai_status?: AiStatus; ai_enrichment?: Record<string, unknown> | null; ai_source?: 'cache' | 'generated' | null; ai_requested_at?: string | null; ai_completed_at?: string | null; ai_error?: string | null;
 }
 
+export interface ScreeningDiagnostics {
+  dataAvailable: number;
+  missingRequiredData: number;
+  outsideEntryWindow: number;
+  quantitativeSkipped: number;
+  reasons: Array<{ reason: string; count: number }>;
+}
+
+/** Derive display counts from evidence, including older runs with misleading persisted counters. */
+export function screeningDiagnostics(rows: Array<{
+  screening_status?: ScreeningStatus | null; quantitative_status?: string;
+  data_quality?: { valid: boolean }; eligibility_rules?: EligibilityRule[]; failed_rules?: EligibilityRule[];
+}>): ScreeningDiagnostics {
+  const result: ScreeningDiagnostics = { dataAvailable: 0, missingRequiredData: 0, outsideEntryWindow: 0, quantitativeSkipped: 0, reasons: [] };
+  const reasons = new Map<string, number>();
+  for (const row of rows) {
+    const rules = row.eligibility_rules ?? row.failed_rules ?? [];
+    const required = rules.find(rule => rule.key === 'required_data' || rule.key === 'critical_data');
+    const missing = required?.passed === false;
+    if (row.screening_status !== 'processing_error' && (required ? required.passed : row.data_quality?.valid === true)) result.dataAvailable++;
+    if (missing) result.missingRequiredData++;
+    if (rules.some(rule => rule.key === 'entry_window' && !rule.passed)) result.outsideEntryWindow++;
+    if (row.quantitative_status === 'skipped') result.quantitativeSkipped++;
+    const rowReasons = new Set<string>();
+    if (row.screening_status === 'processing_error') rowReasons.add('Analisis gagal diproses; periksa detail kegagalan dan coba lagi.');
+    else if (row.screening_status !== 'passed') {
+      if (missing) {
+        if (required.key === 'required_data' && Array.isArray(required.actualValue)) {
+          required.actualValue.filter((value): value is string => typeof value === 'string').forEach(value => rowReasons.add(value));
+        } else rowReasons.add('Data kritis belum tersedia atau belum cukup segar.');
+      }
+      for (const rule of rules.filter(rule => !rule.passed)) {
+        if (rule.key === 'entry_window') rowReasons.add('Cutoff berada di luar jendela entry strategi.');
+        else if (!missing && rule.key !== 'processing_completed') rowReasons.add(`${rule.label}: ${rule.explanation}`);
+      }
+    }
+    for (const reason of rowReasons) reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+  }
+  result.reasons = [...reasons].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason)).slice(0, 8);
+  return result;
+}
+
 export function groupScreeningResults(results: ScreeningResult[], universe: number) {
   const grouped = { passed: results.filter((r) => r.screening_status === 'passed'), watch: results.filter((r) => r.screening_status === 'watch'), rejected: results.filter((r) => r.screening_status === 'rejected'), processingError: results.filter((r) => r.screening_status === 'processing_error') };
   const stages: SelectionStage[] = ['quantitative_analysis', 'quality_gate', 'final_selection'];
-  return { summary: { universe, evaluated: results.filter((r) => r.screening_status !== 'processing_error' && stages.includes(r.selection_stage)).length, passed: grouped.passed.length, watch: grouped.watch.length, rejected: grouped.rejected.length, processingError: grouped.processingError.length, aiRequested: results.filter((r) => r.ai_status && r.ai_status !== 'not_requested').length, aiCompleted: results.filter((r) => r.ai_status === 'completed').length, aiFailed: results.filter((r) => r.ai_status === 'failed').length }, results: grouped };
+  const diagnostics = screeningDiagnostics(results);
+  return { diagnostics, summary: { universe, dataAvailable: diagnostics.dataAvailable, missingRequiredData: diagnostics.missingRequiredData, evaluated: results.filter((r) => r.screening_status !== 'processing_error' && stages.includes(r.selection_stage)).length, passed: grouped.passed.length, watch: grouped.watch.length, rejected: grouped.rejected.length, processingError: grouped.processingError.length, aiRequested: results.filter((r) => r.ai_status && r.ai_status !== 'not_requested').length, aiCompleted: results.filter((r) => r.ai_status === 'completed').length, aiFailed: results.filter((r) => r.ai_status === 'failed').length }, results: grouped };
 }

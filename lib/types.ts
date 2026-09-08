@@ -1,3 +1,4 @@
+import type { StrategyIdentity } from './strategies';
 export interface StockInput {
   emiten: string;
   fromDate: string;
@@ -66,6 +67,9 @@ export interface MarketDetectorResponse {
 }
 
 export interface OrderbookData {
+  /** Provider observation time, if supplied; receipt time must not be substituted. */
+  timestamp?: string;
+  observed_at?: string;
   close: number;
   high: number;
   ara: { value: string };
@@ -233,7 +237,12 @@ export interface ComprehensiveAnalysis {
 export type DecisionVerdict = 'buy_now' | 'wait_for_pullback' | 'watch' | 'avoid' | 'insufficient_data';
 export type DecisionInvalidationKind = 'price' | 'signal' | 'time';
 
-export interface TradingDecision {
+export interface TradingDecision extends Partial<StrategyIdentity> {
+  confidenceStatus?: 'unassessed';
+  horizon?: string;
+  timeExitAt?: string | null;
+  signalExpiresAt?: string | null;
+  executionEligible?: boolean;
   verdict: DecisionVerdict;
   verdictLabel: string;
   entry: { lower: number | null; upper: number | null; reference: number | null; rationale: string };
@@ -355,7 +364,12 @@ export interface RankingReason {
   positive: boolean;
 }
 
-export interface StockRanking {
+export interface StockRanking extends Partial<StrategyIdentity> {
+  run_id?: string | null;
+  information_cutoff_at?: string | null;
+  news_enrichment?: import('./news').NewsEnrichment | null;
+  strategy_support?: { level: import('./strategies').StrategySupportLevel; reasons: string[] };
+  strategy_assessment?: Record<string, unknown> | null;
   id?: number;
   analysis_date: string;
   symbol: string;

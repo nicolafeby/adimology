@@ -1,23 +1,22 @@
 import { NextResponse } from 'next/server';
 import { getProfileSetting } from '@/lib/supabase';
-import { verifySessionToken, setSession } from '@/lib/auth';
+import { verifySessionToken, setSession, sessionTokenFromRequest } from '@/lib/auth';
+import { AUTH_SETTINGS_TIMEOUT_MS } from '@/lib/auth-timeouts';
 
 export const dynamic = 'force-dynamic';
 
-const SESSION_NAME = 'adimology_session';
-
 export async function GET(request: Request) {
+  const signal = AbortSignal.timeout(AUTH_SETTINGS_TIMEOUT_MS);
   try {
-    const enabledSetting = await getProfileSetting('password_enabled');
-    const hash = await getProfileSetting('password_hash');
+    const [enabledSetting, hash] = await Promise.all([
+      getProfileSetting('password_enabled', true, signal),
+      getProfileSetting('password_hash', true, signal),
+    ]);
+    if (!['true','false'].includes(enabledSetting ?? '')) throw new Error('Pengaturan keamanan tidak valid.');
     const isEnabled = enabledSetting === 'true';
 
     // Also check if valid session exists
-    const cookieHeader = request.headers.get('cookie') || '';
-    const sessionCookie = cookieHeader
-      .split(';')
-      .find(c => c.trim().startsWith(`${SESSION_NAME}=`))
-      ?.split('=')[1];
+    const sessionCookie = sessionTokenFromRequest(request);
 
     let isAuthenticated = false;
     if (sessionCookie) {
@@ -50,11 +49,10 @@ export async function GET(request: Request) {
     }
 
     return NextResponse.json(result);
-  } catch (error) {
-    console.error('Error checking password status:', error);
+  } catch {
     return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
-      { status: 500 }
+      { success: false, code: signal.aborted ? 'AUTH_SETTINGS_TIMEOUT' : 'AUTH_SETTINGS_UNAVAILABLE', error: signal.aborted ? 'Layanan pengaturan login belum merespons. Coba lagi setelah koneksi layanan pulih.' : 'Status keamanan tidak dapat diverifikasi. Coba lagi.' },
+      { status: 503 }
     );
   }
 }

@@ -10,8 +10,12 @@
     "test": "tsx --test tests/**/*.test.ts",
     "typecheck": "tsc --noEmit",
     "migrate": "node scripts/run-migrations.js",
-    "build": "next build",
-    "start": "next start"
+    "build": "next build --webpack",
+    "start": "next start",
+    "test:migrations": "node scripts/test-screening-migrations.mjs",
+    "test:screening-ui": "node scripts/screening-smoke.mjs",
+    "audit:screening-data": "node --env-file=.env.local --import tsx scripts/screening-data-audit.ts",
+    "test:screening-auth": "node --env-file=.env.local --import tsx scripts/screening-auth-smoke.ts"
   },
   "dependencies": {
     "@google/genai": "^1.35.0",

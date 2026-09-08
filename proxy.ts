@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifySessionToken } from './lib/auth';
+import { verifySessionToken, sessionTokenFromRequest } from './lib/auth';
 
 const SESSION_NAME = 'adimology_session';
 
@@ -33,11 +33,11 @@ export async function proxy(request: NextRequest) {
   }
 
   // Check for session cookie
-  const sessionCookie = request.cookies.get(SESSION_NAME)?.value;
+  const sessionCookie = sessionTokenFromRequest(request);
 
   if (!sessionCookie) {
     return NextResponse.json(
-      { success: false, error: 'Unauthorized: No session' },
+      { success: false, code: 'SESSION_EXPIRED', error: 'Sesi belum tersedia. Silakan masuk kembali.' },
       { status: 401 }
     );
   }
@@ -47,7 +47,7 @@ export async function proxy(request: NextRequest) {
   if (!session) {
     // Session invalid or expired
     const response = NextResponse.json(
-      { success: false, error: 'Unauthorized: Invalid session' },
+      { success: false, code: 'SESSION_EXPIRED', error: 'Sesi kedaluwarsa. Silakan masuk kembali.' },
       { status: 401 }
     );
     

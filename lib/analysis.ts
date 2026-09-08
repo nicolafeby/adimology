@@ -183,7 +183,7 @@ export function buildComprehensiveAnalysis(input: {
   const regime = calculateMarketRegime(input.benchmarkHistory ?? []);
   const aiScoring = input.catalyst?.swot_analysis?.ai_scoring;
   const catalystComponent: AnalysisComponent = aiScoring ? {
-    key: 'catalyst', label: 'Katalis & Kepemilikan', weight: 10,
+    key: 'catalyst', label: 'Katalis & Kepemilikan', weight: 0, role: 'informational', horizon: 'context_only',
     score: Math.round(clamp(aiScoring.score)), available: true,
     metrics: [
       metric('storySentiment', 'Sentimen AI', aiScoring.sentiment === 'positive' ? 'Positif' : aiScoring.sentiment === 'negative' ? 'Negatif' : 'Netral', aiScoring.sentiment === 'positive' ? 'positive' : aiScoring.sentiment === 'negative' ? 'negative' : 'neutral', aiScoring.rationale),
@@ -191,7 +191,7 @@ export function buildComprehensiveAnalysis(input: {
       metric('aiStoryConfidence', 'AI Confidence', Math.round(clamp(aiScoring.confidence)), aiScoring.confidence >= 70 ? 'positive' : aiScoring.confidence < 50 ? 'negative' : 'neutral', 'Keyakinan AI berdasarkan kecukupan dan konsistensi sumber berita.', '%'),
       metric('ownership', 'Perubahan Kepemilikan', null, 'unavailable', 'Feed ownership terstruktur belum tersedia.'),
     ],
-  } : { key: 'catalyst', label: 'Katalis & Kepemilikan', weight: 10, score: null, available: false, metrics: [] };
+  } : { key: 'catalyst', label: 'Katalis & Kepemilikan', weight: 0, role: 'informational', horizon: 'context_only', score: null, available: false, metrics: [] };
   const marketComponent: AnalysisComponent = regime.label !== 'unavailable' ? {
     key: 'marketRegime', label: 'Market Regime IHSG', weight: 5, score: regime.score, available: true,
     metrics: [
@@ -205,7 +205,7 @@ export function buildComprehensiveAnalysis(input: {
     brokerFlowComponent(input.brokerSummary, input.brokerHistory),
     technicalComponent(input.history ?? []),
     ...fundamentalComponents(input.keyStats, { sector: input.sector, subsector: input.subsector, peers: input.peerSnapshot, cutoff: input.informationCutoffAt ?? now.toISOString() }),
-    liquidityComponent(input.orderbook, input.lastPrice, input.history ?? [], input.sourceTimestamps?.orderbook ?? input.orderbook?.observedAt ?? now.toISOString(), now, input.ara, input.arb),
+    liquidityComponent(input.orderbook, input.lastPrice, input.history ?? [], input.sourceTimestamps?.orderbook ?? input.orderbook?.observedAt ?? null, now, input.ara, input.arb),
     catalystComponent,
     marketComponent,
   ];
@@ -242,14 +242,14 @@ export function buildComprehensiveAnalysis(input: {
     ? Math.round(available.reduce((sum, x) => sum + (x.score ?? 0) * x.weight, 0) / availableWeight)
     : 50;
   const freshnessSources = (['orderbook', 'marketPrice', 'brokerSummary', 'historicalPrice', 'fundamental', 'catalyst', 'benchmark'] as FreshnessSource[]).map((source) => calculateFreshness(source, inferredTimestamps[source], now));
-  const quality = buildAnalysisQuality({ components, now, freshness: freshnessSources, historySamples: input.history?.length ?? 0, brokerHistorySamples: input.brokerHistory?.length ?? 0, catalystConfidence: aiScoring?.confidence ?? null });
+  const quality = buildAnalysisQuality({ components, now, freshness: freshnessSources, historySamples: input.history?.length ?? 0, brokerHistorySamples: input.brokerHistory?.length ?? 0 });
   const dataCompleteness = quality.completeness;
   const confidence = quality.confidence;
   const agreement = quality.agreement.score ?? 0;
   const label: ComprehensiveAnalysis['label'] = score >= 75 ? 'Kuat' : score >= 60 ? 'Positif' : score >= 45 ? 'Netral' : score >= 30 ? 'Hati-hati' : 'Lemah';
   const missing = components.filter((x) => !x.available).map((x) => x.label);
   return {
-    score, dataCompleteness, confidence, agreement, quality, methodologyVersion: `${ANALYSIS_QUALITY_VERSION}+${ACTIVE_STRATEGY_PROFILE.version}`, label, horizon: 'Swing 5–20 hari', generatedAt: now.toISOString(), components,
+    score, dataCompleteness, confidence, agreement, quality, methodologyVersion: `${ANALYSIS_QUALITY_VERSION}+${ACTIVE_STRATEGY_PROFILE.version}`, label, horizon: 'SWING 5–20 sesi bursa', generatedAt: now.toISOString(), components,
     warnings: [...(missing.length ? [`Komponen belum tersedia dan tidak dihitung: ${missing.join(', ')}.`] : []), ...quality.warnings],
   };
 }

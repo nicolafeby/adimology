@@ -120,7 +120,7 @@ test('completeness, confidence, and agreement measure different properties', () 
       swot_analysis: { ai_scoring: { score: 20, confidence: 40, sentiment: 'negative', rationale: 'Bukti terbatas.', positive_catalysts: [], negative_risks: [] } },
     },
   });
-  assert.equal(result.dataCompleteness, 13);
+  assert.equal(result.dataCompleteness, 9); // Informational AI adds no quantitative coverage.
   assert.ok(result.confidence >= 0 && result.confidence <= 100);
   assert.notEqual(result.confidence, result.dataCompleteness);
   assert.notEqual(result.agreement, result.confidence);
@@ -129,7 +129,8 @@ test('completeness, confidence, and agreement measure different properties', () 
 
 test('liquidity metrics use best prices and near-touch depth', () => {
   const result = buildComprehensiveAnalysis({
-    lastPrice: 1000,
+    lastPrice: 1000, now: new Date('2026-09-07T03:00:00Z'),
+    sourceTimestamps: { orderbook: '2026-09-07T03:00:00Z' },
     orderbook: {
       bid: [{ price: 995, volume: 20_000, queues: 10, changePercentage: 0 }],
       offer: [{ price: 1000, volume: 10_000, queues: 8, changePercentage: 0 }],

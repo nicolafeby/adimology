@@ -1,0 +1,105 @@
+{
+  "checkedAt": "2026-09-07T14:46:17.198Z",
+  "mode": "read_only_real_integration",
+  "writesPerformed": false,
+  "strategies": [
+    {
+      "strategy_id": "bpjs",
+      "strategy_version": "bpjs-v1",
+      "configuration_version": "bpjs-baseline-v1",
+      "execution_model": "intraday_next_bar_open_v1",
+      "outcome_definition": "bpjs_same_session_net_return_positive",
+      "status": "insufficient_data",
+      "verifiedSnapshots": 0,
+      "period": null,
+      "metrics": null,
+      "missing": [
+        "Historical universe, board changes and corporate action archive verified as available at cutoff",
+        "Completed intraday candles and same-clock volume archive",
+        "Verified calendar sessions"
+      ]
+    },
+    {
+      "strategy_id": "bsjp",
+      "strategy_version": "bsjp-v1",
+      "configuration_version": "bsjp-baseline-v1",
+      "execution_model": "overnight_next_bar_open_v1",
+      "outcome_definition": "bsjp_next_session_morning_net_return_positive",
+      "status": "insufficient_data",
+      "verifiedSnapshots": 0,
+      "period": null,
+      "metrics": null,
+      "missing": [
+        "Historical universe, board changes and corporate action archive verified as available at cutoff",
+        "Completed intraday candles and same-clock volume archive",
+        "Verified calendar sessions"
+      ]
+    },
+    {
+      "strategy_id": "swing",
+      "strategy_version": "swing-5-20d-v1",
+      "configuration_version": "eligibility-execution-v2",
+      "execution_model": "entry_zone_conservative",
+      "outcome_definition": "net_return_10d_positive",
+      "status": "insufficient_data",
+      "verifiedSnapshots": 0,
+      "period": null,
+      "metrics": null,
+      "missing": [
+        "Historical universe, board changes and corporate action archive verified as available at cutoff",
+        "Compatible immutable SWING v8 snapshots with outcome archive"
+      ]
+    },
+    {
+      "strategy_id": "ara",
+      "strategy_version": "ara-v1",
+      "configuration_version": "ara-baseline-v1",
+      "execution_model": "ara_event_only_no_assumed_fill_v1",
+      "outcome_definition": "official_ara_touched_after_cutoff",
+      "status": "insufficient_data",
+      "verifiedSnapshots": 0,
+      "period": null,
+      "metrics": null,
+      "missing": [
+        "Historical universe, board changes and corporate action archive verified as available at cutoff",
+        "Completed intraday candles and same-clock volume archive",
+        "Verified calendar sessions",
+        "Official ARA per symbol/session with source timestamp"
+      ]
+    }
+  ],
+  "database": {
+    "snapshotCount": 1006,
+    "snapshotReadStatus": "ok",
+    "snapshotReadCode": null,
+    "archivePayloadCount": 0,
+    "archiveStatus": "ok",
+    "archiveReadCode": null,
+    "strategySchemaStatus": "ok",
+    "strategySchemaCode": null,
+    "activeUniverseCount": 966,
+    "historicalUniverseVerified": false
+  },
+  "provider": {
+    "symbol": "BBCA",
+    "daily": {
+      "httpStatus": 200,
+      "resolution": "daily",
+      "bars": 19,
+      "period": {
+        "from": "2026-08-10",
+        "to": "2026-09-07"
+      }
+    },
+    "orderbook": {
+      "httpStatus": 200,
+      "bidLevels": 37,
+      "offerLevels": 56,
+      "providerObservationTimestampPresent": false,
+      "providerAraFieldPresent": true,
+      "officialSessionLimitProvenanceVerified": false
+    },
+    "intradayAdapter": "unavailable",
+    "structuredNewsAdapter": "unavailable"
+  }
+}

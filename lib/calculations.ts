@@ -21,8 +21,8 @@ export function getFraksi(harga: number): number {
 export function calculateTargets(
   rataRataBandar: number,
   barangBandar: number,
-  ara: number,
-  arb: number,
+  ara: number | null,
+  arb: number | null,
   totalBid: number,
   totalOffer: number,
   harga: number
@@ -32,12 +32,12 @@ export function calculateTargets(
   const fraksi = getFraksi(safeHarga);
 
   // Total Papan = (ARA - ARB) / Fraksi
-  const rawTotalPapan = (ara - arb) / fraksi;
+  const rawTotalPapan = ara !== null && arb !== null && ara > arb && arb > 0 ? (ara - arb) / fraksi : NaN;
   const totalPapan = Number.isFinite(rawTotalPapan) && rawTotalPapan > 0 ? rawTotalPapan : 1;
 
   // Rata rata Bid Ofer = (Total Bid + Total Offer) / Total Papan
   const depth = Math.max(0, totalBid) + Math.max(0, totalOffer);
-  const rawAverage = depth > 0 ? depth / totalPapan : null;
+  const rawAverage = depth > 0 && Number.isFinite(rawTotalPapan) ? depth / totalPapan : null;
   const rataRataBidOfer = rawAverage !== null && Number.isFinite(rawAverage) && rawAverage > 0 ? rawAverage : null;
 
   // a = Rata rata bandar × 5%

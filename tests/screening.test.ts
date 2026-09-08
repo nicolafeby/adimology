@@ -18,7 +18,7 @@ test('AI lifecycle cannot change quantitative screening status', () => {
 test('empty passed and summary counts are valid', () => {
   const make = (screening_status: ScreeningResult['screening_status'], symbol: string): ScreeningResult => ({ symbol, screening_status, analysis_date: '2026-01-01', passed_rules: [], failed_rules: [], selection_stage: 'pre_screen', data_quality: { completeness: null, confidence: null, valid: screening_status !== 'processing_error' }, evaluated_at: '2026-01-01T00:00:00Z', run_id: 'run' });
   const grouped = groupScreeningResults([make('watch', 'AAAA'), make('rejected', 'BBBB'), make('processing_error', 'CCCC')], 3);
-  assert.equal(grouped.results.passed.length, 0); assert.deepEqual(grouped.summary, { universe: 3, evaluated: 0, passed: 0, watch: 1, rejected: 1, processingError: 1, aiRequested: 0, aiCompleted: 0, aiFailed: 0 });
+  assert.equal(grouped.results.passed.length, 0); assert.deepEqual(grouped.summary, { universe: 3, dataAvailable: 2, missingRequiredData: 0, evaluated: 0, passed: 0, watch: 1, rejected: 1, processingError: 1, aiRequested: 0, aiCompleted: 0, aiFailed: 0 });
 });
 test('AI coverage is reported independently', () => {
   const make = (symbol: string, ai_status: ScreeningResult['ai_status']): ScreeningResult => ({ symbol, ai_status, screening_status: 'watch', analysis_date: '2026-01-01', passed_rules: [], failed_rules: [], selection_stage: 'quantitative_analysis', data_quality: { completeness: 70, confidence: 60, valid: true }, evaluated_at: '2026-01-01T00:00:00Z', run_id: 'run' });

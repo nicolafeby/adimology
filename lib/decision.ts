@@ -1,6 +1,9 @@
 import { getFraksi } from './calculations';
 import type { ComprehensiveAnalysis, MarketRegimeLabel, PositionSizingOptions, StockAnalysisResult, TradingDecision, TrendSignal } from './types';
 import { calculateAtrStop, calculatePositionSize, DEFAULT_ATR_MULTIPLIER, roundDownToValidTick, roundUpToValidTick } from './risk-management';
+import { getStrategy, strategyIdentity } from './strategies';
+import { atJakartaTime, jakartaClock, nextTradingSession } from './market-calendar';
+import type { StrategyScreeningAssessment, StrategyScreeningData } from './strategy-screening';
 
 export const DECISION_MODEL_VERSION = 'decision-card-v1';
 export const DECISION_THRESHOLDS = Object.freeze({ atrMultiplier: 1.5, maxRiskPercent: 8, minRr1Buy: 1.5, minRr2Adequate: 2, minCompleteness: 60, maxSpreadPercent: 1.5, severeSpreadPercent: 3, minLiquidityScore: 45, maxTargetDistanceAtr: 6, maxTarget1Percent: 12, maxTarget2Percent: 20, minMicrostructureVolatilityPercent: 1.5, validTradingSessions: 5, orderbookFreshMinutes: 20 });
@@ -100,7 +103,7 @@ export function calculateTradingDecision(input: DecisionInput): TradingDecision 
   if (poorSpread) warnings.push(`Spread ${pct(spreadPercent!)}% melewati batas ${DECISION_THRESHOLDS.maxSpreadPercent}%.`);
   if (tooRisky) warnings.push(`Jarak stop ${riskPercent}% melewati batas risiko ${DECISION_THRESHOLDS.maxRiskPercent}%.`);
   if (targetTooFar) warnings.push('Target maksimum jauh dibanding volatilitas saat ini dan perlu divalidasi ulang.');
-  if (aiStoryFresh === false) warnings.push('AI Story kedaluwarsa; hanya konteks, bukan dasar angka keputusan.');
+  // AI freshness remains display metadata; it must not reduce quantitative confidence.
   let verdict: TradingDecision['verdict'] = 'watch';
   const positive = input.signal === 'confirmed_uptrend' || input.signal === 'early_uptrend';
   if (requiredMissing) verdict = 'insufficient_data';
@@ -131,4 +134,38 @@ export function buildTradeDecision(result: StockAnalysisResult, sizing: Position
   const bestBid = finite(context?.bestBid) ?? result.orderbook?.bid.filter((x) => x.price > 0).reduce<number | null>((v, x) => v === null ? x.price : Math.max(v, x.price), null) ?? null;
   const bestOffer = finite(context?.bestOffer) ?? result.orderbook?.offer.filter((x) => x.price > 0).reduce<number | null>((v, x) => v === null ? x.price : Math.min(v, x.price), null) ?? null;
   return calculateTradingDecision({ currentPrice: finite(context?.executionPrice) ?? finite(result.marketData.harga), bestBid, bestOffer, targetRealistic: finite(result.calculated.targetRealistis1), targetMaximum: finite(result.calculated.targetMax), ara: context?.ara ?? null, atrPercent: a ? metric(a, 'atr') : null, atrValue: context?.atrValue, averageDailyVolumeShares: context?.averageDailyVolumeShares, fallbackVolatilityPercent: context?.fallbackVolatilityPercent, priceVsSma20Percent: a ? metric(a, 'sma20') : null, relativeVolume: a ? metric(a, 'volumeRatio') : null, liquidityScore: a ? componentScore(a, 'liquidity') : null, brokerFlowScore: a ? componentScore(a, 'brokerFlow') : null, signal: context?.signal ?? (a && a.score >= 70 ? 'confirmed_uptrend' : a && a.score >= 60 ? 'early_uptrend' : a && a.score < 45 ? 'avoid' : 'watch'), marketRegime: context?.marketRegime ?? 'unavailable', marketGateBlocked: context?.marketGateBlocked ?? false, hardRiskFlags: context?.hardRiskFlags ?? [], dataWarnings: context?.dataWarnings, historicalSnapshot: context?.historicalSnapshot, confidence: a?.confidence ?? 0, dataCompleteness: a?.dataCompleteness ?? 0, generatedAt: a?.generatedAt, orderbookGeneratedAt: context?.orderbookGeneratedAt, aiStoryGeneratedAt: context?.aiStoryGeneratedAt, sizing });
+}
+
+/** Intraday levels use the preset risk baseline and observed execution book. */
+export function buildStrategyTradingDecision(assessment: StrategyScreeningAssessment, data: StrategyScreeningData | undefined, cutoffAt: string, sizing: PositionSizingOptions = {}): TradingDecision {
+  const strategy = getStrategy(assessment.strategy_id), clock = jakartaClock(cutoffAt);
+  const eventOnly = strategy.backtest.eventOnly;
+  const eligible = assessment.screeningStatus === 'passed' && !eventOnly;
+  const offers = data?.book?.offers.filter(row => row.price > 0 && row.shares > 0).sort((a,b) => a.price-b.price) ?? [];
+  const reference = eligible ? roundIdxPrice(offers[0]?.price ?? null, 'up') : null;
+  const stop = reference && strategy.risk.stopPercent !== null ? roundIdxPrice(reference * (1-strategy.risk.stopPercent/100), 'down') : null;
+  const target = reference && strategy.risk.targetPercent !== null ? roundIdxPrice(reference * (1+strategy.risk.targetPercent/100), 'up') : null;
+  const next = strategy.id === 'bsjp' ? nextTradingSession(clock.date, data?.calendar, cutoffAt) : clock.date;
+  const timeExitAt = next ? atJakartaTime(next, strategy.exit.end) : null;
+  const risk = reference && stop ? reference-stop : null;
+  const reward = reference && target ? target-reference : null;
+  const availableShares = data?.book?.offers.reduce((sum,row)=>sum+Math.max(0,row.shares),0) ?? 0;
+  const positionSizing = reference && stop && sizing.accountSize !== undefined && sizing.availableCash !== undefined && sizing.riskPercent !== undefined
+    ? calculatePositionSize({ tradingCapital:sizing.accountSize, availableCash:sizing.availableCash, maximumRiskPercent:Math.min(sizing.riskPercent,strategy.risk.maxRiskPercent), entryPrice:reference, stopPrice:stop, lotSize:100, maxAllocationPercent:sizing.maxAllocationPercent??20, estimatedBuyFeePercent:sizing.buyFeePercent??0.15, estimatedSellFeePercent:sizing.sellFeePercent??0.25, liquidityLimitLots:Math.floor(availableShares*strategy.risk.maxParticipationPercent/100/100) }) : null;
+  const verdict = eligible && reference && stop && target ? 'buy_now' : assessment.reasonCategory === 'strategy_rules' ? 'avoid' : assessment.reasonCategory === 'monitoring' || eventOnly ? 'watch' : 'insufficient_data';
+  return {
+    ...strategyIdentity(strategy.id), verdict, verdictLabel:verdict==='buy_now'?'BELI DI JENDELA PRESET':verdict==='avoid'?'HINDARI':verdict==='watch'?'PANTAU':'DATA BELUM CUKUP', horizon:strategy.horizon,
+    entry:{lower:reference,upper:reference,reference,rationale:eventOnly?'ARA menilai kejadian touch; rencana transaksi belum ditetapkan.':'Referensi best offer tersedia sebelum cutoff; fill tetap harus dikonfirmasi.'},
+    stop:{price:stop,riskPercent:reference&&risk?risk/reference*100:null,rationale:`Baseline stop ${strategy.risk.stopPercent??'belum ditetapkan'}%; gap dapat menembus stop.`},
+    targets:{target1:target,target2:null,rewardPercent1:reference&&reward?reward/reference*100:null,rewardPercent2:null,rationale:'Target baseline preset belum divalidasi pada holdout.'},
+    riskReward:{target1:ratio(reward,risk),target2:null},
+    invalidations:[{kind:'time',condition:`Entry berakhir ${strategy.entry.end} WIB; exit paling lambat ${strategy.exit.end} WIB ${strategy.id==='bsjp'?'sesi bursa berikutnya':'sesi yang sama'}.`},...(stop?[{kind:'price' as const,condition:`Stop Rp ${stop}; harga eksekusi dapat lebih buruk saat gap.`}]:[])],
+    validUntil:{tradingSessions:1,date:assessment.validUntil},signalExpiresAt:assessment.validUntil,timeExitAt,executionEligible:eligible,
+    // Confidence is explicitly unassessed; never disguise the heuristic as probability.
+    confidence:0,confidenceStatus:'unassessed',dataCompleteness:assessment.rules.find(r=>r.key==='required_data')?.passed?100:0,
+    reasons:assessment.rules.filter(rule=>!rule.passed).map(rule=>rule.explanation),warnings:[...assessment.warnings,...(positionSizing?.warnings??[])],generatedAt:cutoffAt,modelVersion:`decision-${strategy.version}`,
+    freshness:{dataAgeMinutes:0,orderbookFresh:assessment.support.level==='ready',aiStoryFresh:null,refreshRequired:assessment.support.level!=='ready',executionDataStatus:assessment.support.level==='ready'?'fresh':'historical_unavailable'},
+    inputs:{currentPrice:assessment.metrics.price??null,spreadPercent:assessment.metrics.spreadPercent??null,heuristicScore:assessment.heuristicScore,signal:'watch',marketRegime:'unavailable'},
+    thresholds:{maxSpreadPercent:strategy.risk.maxSpreadPercent,maxRiskPercent:strategy.risk.maxRiskPercent,maxParticipationPercent:strategy.risk.maxParticipationPercent},atrPercent:null,positionSizing,
+  };
 }

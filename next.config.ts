@@ -9,7 +9,7 @@ const upgradePolicy = isProduction ? "; upgrade-insecure-requests" : "";
 const nextConfig: NextConfig = {
   // Produce a self-contained server bundle for the home-server deployment.
   output: "standalone",
-  allowedDevOrigins: ["192.168.0.186"],
+  allowedDevOrigins: ["192.168.0.186", "127.0.0.1", "localhost", "stockbit.com", "s3.tradingview.com", "lh3.googleusercontent.com"],
   async headers() {
     const securityHeaders = [
       { key: 'X-Content-Type-Options', value: 'nosniff' },

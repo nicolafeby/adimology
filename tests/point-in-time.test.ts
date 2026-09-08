@@ -12,3 +12,11 @@ test('historical replay rejects live orderbook', () => { const replay = createPo
 test('fundamental availability uses publication time', () => assert.equal(validatePointInTimeSource(source({ dataType: 'fundamental', effectiveAt: '2025-12-31T00:00:00+07:00', publishedAt: null }), context).status, 'publication_time_unverified'));
 test('unfinished same-session daily candle is excluded', () => { assert.equal(completedDailyCandleAvailableAt('2026-09-04'), '2026-09-04T16:15:00+07:00'); assert.deepEqual(filterCompletedDailyCandles([{ date: '2026-09-03' }, { date: '2026-09-04' }], context), [{ date: '2026-09-03' }]); });
 test('Jakarta timestamps do not shift IDX session date', () => assert.equal(createPointInTimeContext({ screenedAt: '2026-09-04T00:30:00+07:00' }).analysisDate, '2026-09-04'));
+
+
+test('earlier availableAt cannot conceal future observation or collection timestamps', () => {
+  for (const field of ['observedAt', 'effectiveAt', 'fetchedAt', 'publishedAt'] as const) {
+    const value = validatePointInTimeSource(source({ [field]: '2026-09-05T23:59:00Z', availableAt: '2026-08-01T00:00:00Z' }), context);
+    assert.equal(value.valid, false); assert.equal(value.status, 'future_data');
+  }
+});

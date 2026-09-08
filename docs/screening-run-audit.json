@@ -1,0 +1,221 @@
+{
+  "checkedAt": "2026-09-07T23:40:40.816Z",
+  "mode": "read_only_existing_runs",
+  "databaseWrites": false,
+  "strategyInputArchives": 0,
+  "runs": [
+    {
+      "id": "8b4fff7e-94e9-40a2-bf74-57f3c78fd15e",
+      "strategy_id": "bpjs",
+      "status": "completed",
+      "quantitative_status": "completed",
+      "started_at": "2026-09-07T23:28:22.448+00:00",
+      "completed_at": "2026-09-07T23:28:38.295+00:00",
+      "information_cutoff_at": "2026-09-07T23:28:21.881+00:00",
+      "market_session": "pre_open",
+      "summary": {
+        "watch": 966,
+        "passed": 0,
+        "ranked": 0,
+        "aiFailed": 0,
+        "aiReused": 0,
+        "rejected": 0,
+        "universe": 966,
+        "aiPending": 0,
+        "aiSkipped": 966,
+        "aiCompleted": 0,
+        "aiRequested": 0,
+        "preScreenFailed": 0,
+        "preScreenPassed": 0,
+        "processingError": 0,
+        "quantitativeFailed": 0,
+        "quantitativeSkipped": 966,
+        "eligibilityEvaluated": 966,
+        "quantitativeSelected": 0,
+        "dataAcquisitionFailed": 0,
+        "quantitativeCompleted": 0,
+        "dataAcquisitionSucceeded": 966
+      },
+      "strategy_support": {
+        "level": "unavailable",
+        "reasons": [
+          "Adapter provider belum menyediakan arsip candle intraday selesai dan volume pembanding pada jam yang sama.",
+          "Kalender sesi bursa dan provenance timestamp orderbook harus diverifikasi sebelum entry."
+        ]
+      },
+      "rows": 966,
+      "categories": {
+        "watch": 966
+      },
+      "quantitativeCompleted": 0,
+      "validData": 0,
+      "failedRules": {
+        "required_data": 966,
+        "continuous_session": 966,
+        "entry_window": 966,
+        "intraday_freshness": 966,
+        "positive_momentum": 966,
+        "above_vwap": 966,
+        "same_clock_rvol": 966,
+        "spread": 966,
+        "liquidity": 966
+      },
+      "missingRequirements": {
+        "Kalender bursa pada cutoff belum diverifikasi.": 966,
+        "Candle intraday selesai dari awal sesi sampai cutoff belum lengkap.": 966,
+        "Minimum 5 sesi volume kumulatif pada jam pembanding yang sama belum tersedia.": 966,
+        "Orderbook bertimestamp segar dan tersedia sebelum cutoff belum tersedia.": 966
+      },
+      "failures": {}
+    },
+    {
+      "id": "383b339d-fd1b-4ee0-9c2b-03f74706354a",
+      "strategy_id": "bsjp",
+      "status": "failed",
+      "quantitative_status": "failed",
+      "started_at": "2026-09-07T23:30:57.723+00:00",
+      "completed_at": "2026-09-07T23:31:59.989+00:00",
+      "information_cutoff_at": "2026-09-07T23:30:56.687+00:00",
+      "market_session": "pre_open",
+      "summary": {},
+      "strategy_support": {
+        "level": "unavailable",
+        "reasons": [
+          "Adapter provider belum menyediakan arsip candle intraday selesai dan volume pembanding pada jam yang sama.",
+          "Kalender sesi bursa dan provenance timestamp orderbook harus diverifikasi sebelum entry."
+        ]
+      },
+      "rows": 0,
+      "categories": {},
+      "quantitativeCompleted": 0,
+      "validData": 0,
+      "failedRules": {},
+      "missingRequirements": {},
+      "failures": {}
+    },
+    {
+      "id": "4058e9aa-482e-4711-9534-92aaf5eba6f2",
+      "strategy_id": "swing",
+      "status": "partial",
+      "quantitative_status": "partial",
+      "started_at": "2026-09-07T23:29:41.67+00:00",
+      "completed_at": "2026-09-07T23:30:12.06+00:00",
+      "information_cutoff_at": "2026-09-07T23:29:41.271+00:00",
+      "market_session": "pre_open",
+      "summary": {
+        "watch": 0,
+        "passed": 0,
+        "ranked": 0,
+        "aiFailed": 0,
+        "aiReused": 0,
+        "rejected": 0,
+        "universe": 966,
+        "aiPending": 0,
+        "aiSkipped": 966,
+        "aiCompleted": 0,
+        "aiRequested": 0,
+        "preScreenFailed": 897,
+        "preScreenPassed": 65,
+        "processingError": 104,
+        "backtestEligible": 0,
+        "pointInTimeValid": 0,
+        "backtestIneligible": 966,
+        "pointInTimeInvalid": 0,
+        "quantitativeFailed": 100,
+        "quantitativeSkipped": 862,
+        "eligibilityEvaluated": 0,
+        "quantitativeSelected": 100,
+        "dataAcquisitionFailed": 4,
+        "quantitativeCompleted": 0,
+        "dataAcquisitionSucceeded": 962
+      },
+      "strategy_support": {
+        "level": "partial",
+        "reasons": [
+          "Daily OHLCV dan baseline tersedia; kesiapan eksekusi bergantung freshness provider dan arsip point-in-time."
+        ]
+      },
+      "rows": 966,
+      "categories": {
+        "pending": 862,
+        "processing_error": 104
+      },
+      "quantitativeCompleted": 0,
+      "validData": 0,
+      "failedRules": {
+        "processing_completed": 104
+      },
+      "missingRequirements": {},
+      "failures": {
+        "other_processing_error": 104
+      }
+    },
+    {
+      "id": "c773fd23-8898-4f09-8598-78a7c9d9f2a5",
+      "strategy_id": "ara",
+      "status": "completed",
+      "quantitative_status": "completed",
+      "started_at": "2026-09-07T14:50:03.098+00:00",
+      "completed_at": "2026-09-07T14:50:19.529+00:00",
+      "information_cutoff_at": "2026-09-07T14:50:02.544+00:00",
+      "market_session": "post_close",
+      "summary": {
+        "watch": 966,
+        "passed": 0,
+        "ranked": 0,
+        "aiFailed": 0,
+        "aiReused": 0,
+        "rejected": 0,
+        "universe": 966,
+        "aiPending": 0,
+        "aiSkipped": 966,
+        "aiCompleted": 0,
+        "aiRequested": 0,
+        "preScreenFailed": 0,
+        "preScreenPassed": 0,
+        "processingError": 0,
+        "quantitativeFailed": 0,
+        "quantitativeSkipped": 966,
+        "eligibilityEvaluated": 966,
+        "quantitativeSelected": 0,
+        "dataAcquisitionFailed": 0,
+        "quantitativeCompleted": 0,
+        "dataAcquisitionSucceeded": 966
+      },
+      "strategy_support": {
+        "level": "unavailable",
+        "reasons": [
+          "Adapter provider belum menyediakan arsip candle intraday selesai dan volume pembanding pada jam yang sama.",
+          "Kalender sesi bursa dan provenance timestamp orderbook harus diverifikasi sebelum entry.",
+          "Batas ARA resmi per simbol/sesi dengan timestamp sumber belum tersedia."
+        ]
+      },
+      "rows": 966,
+      "categories": {
+        "watch": 966
+      },
+      "quantitativeCompleted": 0,
+      "validData": 0,
+      "failedRules": {
+        "required_data": 966,
+        "continuous_session": 966,
+        "entry_window": 966,
+        "intraday_freshness": 966,
+        "positive_momentum": 966,
+        "above_vwap": 966,
+        "same_clock_rvol": 966,
+        "spread": 966,
+        "liquidity": 966,
+        "not_already_ara": 966
+      },
+      "missingRequirements": {
+        "Kalender bursa pada cutoff belum diverifikasi.": 966,
+        "Candle intraday selesai dari awal sesi sampai cutoff belum lengkap.": 966,
+        "Minimum 5 sesi volume kumulatif pada jam pembanding yang sama belum tersedia.": 966,
+        "Orderbook bertimestamp segar dan tersedia sebelum cutoff belum tersedia.": 966,
+        "ARA resmi untuk simbol/sesi dengan timestamp sumber belum tersedia.": 966
+      },
+      "failures": {}
+    }
+  ]
+}

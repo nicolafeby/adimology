@@ -2,6 +2,8 @@
 import { useState } from 'react';
 import { buildTradeDecision } from '@/lib/decision';
 import type { StockAnalysisResult, TradingDecision } from '@/lib/types';
+import { getStrategyProfile, type StrategyId } from '@/lib/strategies';
+import { displayTimestamp } from './ScreeningNews';
 const price = (v: number | null) => v === null ? '—' : `Rp ${v.toLocaleString('id-ID')}`;
 const rr = (v: number | null) => v === null ? '—' : `1 : ${v.toFixed(2)}`;
 const kind = { price: 'Harga', signal: 'Sinyal', time: 'Waktu' } as const;
@@ -16,10 +18,14 @@ const RISK_PRESETS = [
   { key: 'aggressive', label: 'Agresif', riskPercent: 1.5, allocation: 25, atrMultiplier: 1.5 },
 ] as const;
 
-export function DecisionCardView({ decision, symbol, currentPrice, allowSizing = false }: { decision: TradingDecision; symbol: string; currentPrice: number; allowSizing?: boolean }) {
+export function DecisionCardView({ decision, symbol, currentPrice, allowSizing = false, strategyId }: { decision: TradingDecision; symbol: string; currentPrice: number; allowSizing?: boolean; strategyId?: StrategyId }) {
   const displayedCurrentPrice = typeof decision.inputs.currentPrice === 'number' ? decision.inputs.currentPrice : currentPrice;
+  const identity = decision.strategy_id ?? strategyId;
+  const strategy = identity ? getStrategyProfile(identity) : null;
   return <section className={`decision-card decision-${decision.verdict}`}>
-    <header className="decision-header"><div><span>Decision Card · Swing 5–20 hari</span><h3>{symbol.toUpperCase()}</h3></div><div className="decision-verdict"><small>Keputusan</small><strong>{decision.verdictLabel}</strong></div></header>
+    <header className="decision-header"><div><span>Decision Card · {strategy ? `${strategy.name} · ${decision.horizon ?? strategy.horizon}` : 'Strategi legacy tidak terverifikasi'}</span><h3>{symbol.toUpperCase()}</h3></div><div className="decision-verdict"><small>Keputusan</small><strong>{decision.verdictLabel}</strong></div></header>
+    {strategy?.id === 'ara' && <p className="decision-historical">Monitoring kandidat sentuh ARA. Skor heuristik bukan probabilitas; menyentuh ARA tidak membuktikan order dapat terisi.</p>}
+    {decision.executionEligible === false && <p className="decision-refresh">Snapshot belum memenuhi kelayakan eksekusi.</p>}
     {decision.freshness.refreshRequired && <p className="decision-refresh">Refresh required · data eksekusi sudah kedaluwarsa</p>}
     {decision.freshness.executionDataStatus === 'historical_unavailable' && <p className="decision-historical">Snapshot historis · orderbook live tidak diterapkan pada tanggal ini</p>}
     <p className="decision-rationale">{decision.reasons.join(' ')}</p>
@@ -29,7 +35,8 @@ export function DecisionCardView({ decision, symbol, currentPrice, allowSizing =
       <div><span>Target 1</span><strong className="decision-positive">{price(decision.targets.target1)}</strong><small>{decision.targets.rewardPercent1 ?? '—'}% · RR {rr(decision.riskReward.target1)}</small></div>
       <div><span>Target 2</span><strong className="decision-positive">{price(decision.targets.target2)}</strong><small>{decision.targets.rewardPercent2 ?? '—'}% · RR {rr(decision.riskReward.target2)}</small></div>
     </div>
-    <div className="decision-meta"><span>Valid {decision.validUntil.tradingSessions} sesi</span><span>Confidence {decision.confidence}%</span><span>Data {decision.dataCompleteness}%</span><span>Umur {decision.freshness.dataAgeMinutes ?? '—'} menit</span></div>
+    <div className="decision-meta"><span>{decision.signalExpiresAt ? `Valid sampai ${displayTimestamp(decision.signalExpiresAt)}` : `Valid ${decision.validUntil.tradingSessions} sesi`}</span><span>Confidence {decision.confidenceStatus === 'unassessed' ? 'Belum dinilai' : `${decision.confidence}%`}</span><span>Data {decision.dataCompleteness}%</span><span>Umur {decision.freshness.dataAgeMinutes ?? '—'} menit</span></div>
+    {(decision.timeExitAt || strategy) && <p className="decision-rationale">Time exit: {decision.timeExitAt ? displayTimestamp(decision.timeExitAt) : strategy?.id === 'swing' ? 'Sesuai horizon 5/10/20 sesi dan invalidasi sinyal.' : `${strategy?.exit.start}–${strategy?.exit.end} WIB${strategy?.exit.sessionOffset === 1 ? ' pada sesi bursa berikutnya' : ' pada sesi yang sama'}; tanggal sesi harus terverifikasi.`}</p>}
     <div className="decision-invalidation"><span>Invalid jika</span><ul>{decision.invalidations.map((x) => <li key={`${x.kind}-${x.condition}`}><strong>{kind[x.kind]}:</strong> {x.condition}</li>)}</ul></div>
     {decision.warnings.length > 0 && <div className="decision-warnings"><strong>Peringatan</strong><ul>{decision.warnings.map((x) => <li key={x}>{x}</li>)}</ul></div>}
     {allowSizing && decision.positionSizing && <div className="decision-sizing-result"><div><span>Ukuran rekomendasi</span><strong>{decision.positionSizing.recommendedLots.toLocaleString('id-ID')} lot ({decision.positionSizing.recommendedShares.toLocaleString('id-ID')} saham)</strong></div><div><span>Risk budget</span><strong>{price(decision.positionSizing.riskBudget)}</strong></div><div><span>Estimasi rugi + fee</span><strong>{price(decision.positionSizing.estimatedLossAfterFees)}</strong></div><div><span>Alokasi modal</span><strong>{decision.positionSizing.capitalAllocationPercent.toFixed(2)}%</strong></div><div><span>Fee beli / jual@stop</span><strong>{price(decision.positionSizing.estimatedBuyFee)} / {price(decision.positionSizing.estimatedSellFeeAtStop)}</strong></div><small>Pembatas: {decision.positionSizing.limitingFactors.join(', ')}</small></div>}

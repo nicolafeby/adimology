@@ -1,3 +1,4 @@
+import { fetchProvider, readHistoryPayload, validateHistoricalSummaryLimit } from './provider-http';
 import type { MarketDetectorResponse, OrderbookResponse, BrokerData, WatchlistResponse, BrokerSummaryData, EmitenInfoResponse, KeyStatsResponse, KeyStatsData, KeyStatsItem, WatchlistGroup } from './types';
 import { parseKeyStatsResponse } from './key-stats';
 import { getSessionValue, updateTokenLastUsed, invalidateToken } from './supabase';
@@ -108,7 +109,7 @@ export async function fetchMarketDetector(
   url.searchParams.append('investor_type', 'INVESTOR_TYPE_ALL');
   url.searchParams.append('limit', '25');
 
-  const response = await fetch(url.toString(), {
+  const response = await fetchProvider(url.toString(), {
     method: 'GET',
     headers: await getHeaders(),
   });
@@ -124,7 +125,7 @@ export async function fetchMarketDetector(
 export async function fetchOrderbook(emiten: string): Promise<OrderbookResponse> {
   const url = `${STOCKBIT_BASE_URL}/company-price-feed/v2/orderbook/companies/${emiten}`;
 
-  const response = await fetch(url, {
+  const response = await fetchProvider(url, {
     method: 'GET',
     headers: await getHeaders(),
     cache: 'no-store',
@@ -161,7 +162,7 @@ export async function fetchEmitenInfo(emiten: string): Promise<EmitenInfoRespons
 
   const url = `${STOCKBIT_BASE_URL}/emitten/${emiten}/info`;
 
-  const response = await fetch(url, {
+  const response = await fetchProvider(url, {
     method: 'GET',
     headers: await getHeaders(),
   });
@@ -196,7 +197,7 @@ export async function fetchSectors(): Promise<string[]> {
 
   const url = `${STOCKBIT_BASE_URL}/emitten/sectors`;
 
-  const response = await fetch(url, {
+  const response = await fetchProvider(url, {
     method: 'GET',
     headers: await getHeaders(),
   });
@@ -221,7 +222,7 @@ export async function fetchSectors(): Promise<string[]> {
  */
 export async function fetchWatchlistGroups(): Promise<WatchlistGroup[]> {
   const url = `${STOCKBIT_BASE_URL}/watchlist?page=1&limit=500`;
-  const response = await fetch(url, {
+  const response = await fetchProvider(url, {
     method: 'GET',
     headers: await getHeaders(),
   });
@@ -248,7 +249,7 @@ export async function fetchWatchlist(watchlistId?: number): Promise<WatchlistRes
 
   // Fetch watchlist details
   const detailUrl = `${STOCKBIT_BASE_URL}/watchlist/${id}?page=1&limit=500`;
-  const response = await fetch(detailUrl, {
+  const response = await fetchProvider(detailUrl, {
     method: 'GET',
     headers: await getHeaders(),
   });
@@ -339,7 +340,7 @@ export function getBrokerSummary(marketDetectorData: MarketDetectorResponse): Br
 export async function fetchKeyStats(emiten: string): Promise<KeyStatsData> {
   const url = `${STOCKBIT_BASE_URL}/keystats/ratio/v1/${emiten}?year_limit=10`;
   
-  const response = await fetch(url, {
+  const response = await fetchProvider(url, {
     method: 'GET',
     headers: await getHeaders(),
   });
@@ -380,9 +381,10 @@ export async function fetchHistoricalSummary(
   endDate: string,
   limit: number = 12
 ): Promise<HistoricalSummaryItem[]> {
+  validateHistoricalSummaryLimit(limit);
   const url = `${STOCKBIT_BASE_URL}/company-price-feed/historical/summary/${emiten}?period=HS_PERIOD_DAILY&start_date=${startDate}&end_date=${endDate}&limit=${limit}&page=1`;
 
-  const response = await fetch(url, {
+  const response = await fetchProvider(url, {
     method: 'GET',
     headers: await getHeaders(),
   });
@@ -390,7 +392,7 @@ export async function fetchHistoricalSummary(
   await handleApiResponse(response, 'Historical Summary API');
 
   const json = await response.json();
-  return json.data?.result || [];
+  return readHistoryPayload(json) as HistoricalSummaryItem[];
 }
 
 /**
@@ -399,7 +401,7 @@ export async function fetchHistoricalSummary(
 export async function deleteWatchlistItem(watchlistId: number, companyId: number): Promise<void> {
   const url = `${STOCKBIT_BASE_URL}/watchlist/${watchlistId}/company/${companyId}/item`;
 
-  const response = await fetch(url, {
+  const response = await fetchProvider(url, {
     method: 'DELETE',
     headers: await getHeaders(),
   });

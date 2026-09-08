@@ -1,106 +1,113 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import type { AgentStoryResult, AnalysisMetric, StockRanking } from '@/lib/types';
+import type { ScreeningResult } from '@/lib/screening';
+import type { StrategyScreeningAssessment } from '@/lib/strategy-screening';
+import { getStrategyProfile, isStrategyId, providerStrategySupport } from '@/lib/strategies';
+import { safeNewsUrl, unverifiedStoryNewsEnrichment, type NewsEnrichment } from '@/lib/news';
 import { DecisionCardView } from './DecisionCard';
+import { ScreeningNews, displayTimestamp } from './ScreeningNews';
 
-export interface RankingDetailData { ranking: StockRanking; story: AgentStoryResult | null }
-const signalLabel: Record<string, string> = { confirmed_uptrend: 'Confirmed Uptrend', early_uptrend: 'Early Uptrend', watch: 'Watch', avoid: 'Avoid' };
-const regimeLabel: Record<string, string> = { bullish: 'Bullish', neutral: 'Neutral', bearish: 'Bearish', unavailable: 'Belum tersedia' };
-const signedPercent = (value: number | null) => value === null ? 'Belum tersedia' : `${value >= 0 ? '+' : ''}${value.toLocaleString('id-ID', { maximumFractionDigits: 1 })}%`;
-
-const formatMetric = (metric: AnalysisMetric) => {
-  if (metric.value === null) return 'Belum tersedia';
-  const value = typeof metric.value === 'number' ? metric.value.toLocaleString('id-ID', { maximumFractionDigits: 2 }) : metric.value;
-  return metric.unit ? `${value} ${metric.unit}` : value;
-};
-
+export interface RankingDetailData { ranking: StockRanking | null; story: AgentStoryResult | null; screening?: ScreeningResult & { point_in_time_valid?: boolean; backtest_eligible?: boolean; backtest_ineligibility_reasons?: Array<{ code: string; message?: string }> }; run?: Record<string, unknown> | null }
+const formatMetric = (metric: AnalysisMetric) => metric.value === null ? 'Belum tersedia' : `${typeof metric.value === 'number' ? metric.value.toLocaleString('id-ID', { maximumFractionDigits: 2 }) : metric.value}${metric.unit ? ` ${metric.unit}` : ''}`;
 export default function RankingDetailModal({ data, loading, error, onClose }: { data: RankingDetailData | null; loading: boolean; error: string; onClose: () => void }) {
+  const ranking = data?.ranking;
+  const strategyId = ranking?.strategy_id ?? data?.screening?.strategy_id ?? data?.run?.strategy_id;
+  const profile = isStrategyId(strategyId) ? getStrategyProfile(strategyId) : null;
+  const support = ranking?.strategy_support ?? data?.screening?.strategy_support ?? (profile ? providerStrategySupport(profile.id) : null);
+  const runId = ranking?.run_id ?? data?.screening?.run_id ?? data?.run?.id;
+  const symbol = ranking?.symbol ?? data?.screening?.symbol;
+  const cutoff = ranking?.information_cutoff_at ?? data?.run?.information_cutoff_at;
+  const historical = data?.run?.execution_mode === 'historical_replay';
+  const assessment = data?.screening?.strategy_assessment ?? ranking?.strategy_assessment as StrategyScreeningAssessment | null | undefined;
+  const officialAra = assessment?.officialAra;
   const [story, setStory] = useState<AgentStoryResult | null>(data?.story ?? null);
-  const [storyLoading, setStoryLoading] = useState(false);
-  const [storyError, setStoryError] = useState('');
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  useEffect(() => { setStory(data?.story ?? null); }, [data]);
+  const [news, setNews] = useState<NewsEnrichment | null>(ranking?.news_enrichment ?? data?.screening?.news_enrichment ?? null);
+  const [storyLoading, setStoryLoading] = useState(false), [storyError, setStoryError] = useState('');
+  const modalRef = useRef<HTMLElement>(null), epochRef = useRef(0), controllerRef = useRef<AbortController | null>(null);
   useEffect(() => {
-    const previous = document.body.style.overflow;
+    epochRef.current++; controllerRef.current?.abort();
+    setStory(data?.story ?? null); setNews(data?.ranking?.news_enrichment ?? data?.screening?.news_enrichment ?? null); setStoryError(''); setStoryLoading(false);
+    return () => { epochRef.current++; controllerRef.current?.abort(); };
+  }, [data]);
+  useEffect(() => {
+    const previous = document.body.style.overflow, previousFocus = document.activeElement as HTMLElement | null;
     document.body.style.overflow = 'hidden';
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => { document.body.style.overflow = previous; window.removeEventListener('keydown', onKey); if (pollingRef.current) clearInterval(pollingRef.current); };
-  }, [onClose]);
-
-  const pollStory = (symbol: string) => {
-    if (pollingRef.current) clearInterval(pollingRef.current);
-    let attempts = 0;
-    const check = async () => {
-      attempts++;
-      try {
-        const response = await fetch(`/api/analyze-story?emiten=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
-        const json = await response.json();
-        const latest = Array.isArray(json.data) ? json.data[0] as AgentStoryResult : null;
-        if (latest) setStory(latest);
-        if (latest?.status === 'completed') {
-          setStoryLoading(false); setStoryError('');
-          if (pollingRef.current) clearInterval(pollingRef.current);
-        } else if (latest?.status === 'error') {
-          setStoryLoading(false); setStoryError(latest.error_message || 'Analisis good news gagal.');
-          if (pollingRef.current) clearInterval(pollingRef.current);
-        } else if (attempts >= 60) {
-          setStoryLoading(false); setStoryError('Analisis masih berjalan. Tutup dan buka detail lagi beberapa saat lagi.');
-          if (pollingRef.current) clearInterval(pollingRef.current);
-        }
-      } catch { /* transient polling error; retry on the next tick */ }
+    modalRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+      if (event.key !== 'Tab') return;
+      const elements = Array.from(modalRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input, select, summary, [tabindex="0"]') ?? []).filter(element => element.getClientRects().length > 0);
+      const first = elements[0], last = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     };
-    void check();
-    pollingRef.current = setInterval(check, 5000);
-  };
-
+    window.addEventListener('keydown', onKey);
+    return () => { document.body.style.overflow = previous; window.removeEventListener('keydown', onKey); previousFocus?.focus(); };
+  }, [onClose]);
+  const refreshEnrichment = useCallback(async (signal: AbortSignal) => {
+    if (!runId || !symbol || !profile) return;
+    const epoch = epochRef.current;
+    const query = new URLSearchParams({ strategyId: profile.id, runId: String(runId) });
+    const response = await fetch(`/api/rankings/${encodeURIComponent(symbol)}?${query}`, { cache: 'no-store', signal });
+    const json = await response.json();
+    if (!response.ok || !json.success) throw new Error('Pengayaan belum dapat dimuat.');
+    if (signal.aborted || epoch !== epochRef.current) return;
+    // Only enrichment changes. Quantitative prediction displayed above remains immutable.
+    setStory(json.data?.story ?? null);
+    setNews(json.data?.ranking?.news_enrichment ?? json.data?.screening?.news_enrichment ?? null);
+  }, [profile, runId, symbol]);
+  const pending = story?.status === 'pending' || story?.status === 'processing' || news?.status === 'pending';
   useEffect(() => {
-    if (data && (data.story?.status === 'pending' || data.story?.status === 'processing')) {
-      setStoryLoading(true);
-      pollStory(data.ranking.symbol);
-    }
-    // Polling is keyed to the persisted story id; pollStory intentionally owns
-    // and replaces the interval for this modal instance.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.ranking.symbol, data?.story?.id, data?.story?.status]);
-
+    if (!pending || historical || !runId || !profile || !symbol) return;
+    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>; let attempts = 0;
+    const tick = async () => {
+      attempts++;
+      try { await refreshEnrichment(controller.signal); } catch { /* Bounded retry; never replace saved quantitative results. */ }
+      if (controller.signal.aborted) return;
+      if (attempts >= 60) { setStoryError('Pembaruan otomatis dijeda. Tutup dan buka detail untuk memuat status terbaru.'); return; }
+      timer = setTimeout(tick, 5000);
+    };
+    timer = setTimeout(tick, 3000);
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [pending, historical, runId, profile, symbol, refreshEnrichment]);
   const startStoryAnalysis = async () => {
-    if (!data) return;
+    if (!runId || !profile || !symbol || historical) return;
+    const epoch = epochRef.current, controller = new AbortController(); controllerRef.current?.abort(); controllerRef.current = controller;
     setStoryLoading(true); setStoryError('');
     try {
-      const response = await fetch('/api/analyze-story', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ emiten: data.ranking.symbol }) });
+      const response = await fetch(`/api/screener/runs/${encodeURIComponent(String(runId))}/enrichment`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ strategyId: profile.id, symbol }), signal: controller.signal });
       const json = await response.json();
-      if (!response.ok || !json.success) throw new Error(json.error || 'Gagal memulai analisis good news');
-      setStory(json.data);
-      pollStory(data.ranking.symbol);
-    } catch (reason) { setStoryLoading(false); setStoryError(reason instanceof Error ? reason.message : 'Gagal memulai analisis good news'); }
+      if (!response.ok || !json.success) throw new Error('Pengambilan berita gagal.');
+      await refreshEnrichment(controller.signal);
+    } catch { if (!controller.signal.aborted && epoch === epochRef.current) setStoryError('Pengambilan berita gagal. Hasil kuantitatif tetap tersimpan; coba pengayaan lagi.'); }
+    finally { if (!controller.signal.aborted && epoch === epochRef.current) setStoryLoading(false); }
   };
+  const displayedNews = news ?? (profile && symbol && typeof cutoff === 'string' ? unverifiedStoryNewsEnrichment(story, { strategyId: profile.id, symbol, informationCutoffAt: cutoff }) : null);
 
-  return <div className="ranking-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section className="ranking-modal" role="dialog" aria-modal="true" aria-label="Detail analisis ranking">
-      <button className="ranking-modal-close" onClick={onClose} aria-label="Tutup detail"><X size={20} /></button>
-      {loading && <div className="ranking-modal-state">Memuat seluruh parameter analisis…</div>}
-      {error && <div className="ranking-modal-state ranking-error">{error}</div>}
-      {data && <>
-        <header className="ranking-detail-head"><div><span className="ranking-eyebrow">Peringkat #{data.ranking.rank} · {data.ranking.analysis_date}</span><h2>{data.ranking.symbol}</h2><p>Analisis multifaktor untuk horizon swing 5–20 hari.</p></div><div className="ranking-detail-score"><strong>{data.ranking.score}</strong><span>/100</span><small>{data.ranking.data_completeness}% data tersedia</small></div></header>
-        <section className="ranking-detail-verdict"><h3>Kualitas analisis</h3><div className="ranking-reasons"><span title="Berapa banyak input tersedia">Kelengkapan: {data.ranking.data_completeness}%</span><span title="Seberapa selaras arah antar-komponen">Agreement: {data.ranking.signal_agreement == null ? 'Belum tersedia pada versi analisis ini' : `${data.ranking.signal_agreement}% · ${data.ranking.analysis_quality?.agreement.label ?? ''}`}</span><span title="Seberapa layak hasil dipercaya">Confidence: {data.ranking.confidence == null ? 'Belum tersedia pada versi analisis ini' : `${data.ranking.confidence}%`}</span><span>Arah dominan: {data.ranking.dominant_direction ?? 'Belum tersedia pada versi analisis ini'}</span><span>Freshness: {data.ranking.freshness == null ? 'Belum tersedia pada versi analisis ini' : `${data.ranking.freshness}%`}</span><span>Reliability: {data.ranking.reliability == null ? 'Belum tersedia pada versi analisis ini' : `${data.ranking.reliability}%`}</span></div>{data.ranking.conflicts?.length ? <div className="ranking-risk"><strong>Konflik utama:</strong><ul>{data.ranking.conflicts.map((conflict) => <li key={conflict.key}>{conflict.message}</li>)}</ul></div> : null}</section>
-        <section className="ranking-detail-verdict"><h3>Kalibrasi probabilitas 10 sesi</h3>{data.ranking.probability_calibration ? <><div className="ranking-reasons"><span title="Probabilitas historis conditional pada sinyal yang lolos pipeline.">Peluang net return positif: {data.ranking.model_probability == null ? 'Belum tersedia' : `${(data.ranking.model_probability * 100).toFixed(1)}%`}</span><span title="Interval ketidakpastian statistik; berbeda dari Analysis Confidence.">Rentang statistik 95%: {data.ranking.probability_calibration.confidenceInterval.lower == null ? 'Belum tersedia' : `${(data.ranking.probability_calibration.confidenceInterval.lower * 100).toFixed(1)}–${(data.ranking.probability_calibration.confidenceInterval.upper! * 100).toFixed(1)}%`}</span><span>Sample: {data.ranking.probability_calibration.sampleSize} outcome</span><span>Model: {data.ranking.probability_calibration.modelVersion}</span><span>Market regime: {regimeLabel[data.ranking.probability_calibration.requestedRegime]}</span><span>Calibration source: {data.ranking.probability_calibration.sourceLevel.replaceAll('_', ' ')}</span><span>Score range: {data.ranking.probability_calibration.scoreBucket.low}–{Math.min(100, data.ranking.probability_calibration.scoreBucket.high - 1)}</span><span>Outcome: Net return setelah biaya dan slippage &gt; 0</span><span>Cutoff: {data.ranking.probability_calibration.calibrationCutoff.slice(0, 10)}</span></div>{data.ranking.probability_calibration.warnings.map((warning) => <p className="ranking-risk" key={warning}>{warning}</p>)}</> : <p>Snapshot legacy tidak memiliki metadata kalibrasi terstruktur.</p>}</section>
-        <section className="ranking-detail-verdict"><h3>Kenapa masuk ranking?</h3><p>{buildDetailSummary(data.ranking)}</p>{data.ranking.market_context && <div className="ranking-reasons"><span>Market Regime: {regimeLabel[data.ranking.market_context.regime.label]}{data.ranking.market_context.regime.score === null ? '' : ` (${data.ranking.market_context.regime.score}/100)`}</span><span className={(data.ranking.market_context.relativeStrength.rs20d ?? -Infinity) > 0 ? 'positive' : ''}>RS vs IHSG 5D/20D: {signedPercent(data.ranking.market_context.relativeStrength.rs5d)} / {signedPercent(data.ranking.market_context.relativeStrength.rs20d)}</span><span>Sector RS 5D/20D: {signedPercent(data.ranking.market_context.relativeStrength.sectorRs5d)} / {signedPercent(data.ranking.market_context.relativeStrength.sectorRs20d)}</span><span>Gate: {signalLabel[data.ranking.market_context.gate.signalBeforeGate]} → {signalLabel[data.ranking.market_context.gate.signalAfterGate]}</span>{data.ranking.market_context.gate.confidenceAfter !== null && <span>Confidence setelah gate: {data.ranking.market_context.gate.confidenceAfter}%</span>}<span>Alasan: {data.ranking.market_context.gate.reason}</span></div>}<div className="ranking-reasons">{data.ranking.reasons.map((reason) => <span className={reason.positive ? 'positive' : ''} key={reason.label}>{reason.label}: {reason.value}</span>)}</div>{data.ranking.risk_flags.length > 0 && <p className="ranking-risk">Risiko yang perlu diperhatikan: {data.ranking.risk_flags.join(' · ')}</p>}</section>
-        {data.ranking.market_context && <section className="ranking-detail-verdict"><h3>Exceptional Strength: {data.ranking.market_context.gate.exceptionalStrength ? '✓ Lolos' : '✕ Tidak lolos'}</h3><div className="ranking-reasons">{data.ranking.market_context.gate.exceptionalStrengthCheck?.checks.map((check) => <span className={check.passed ? 'positive' : ''} key={check.key}>{check.passed ? '✓' : '✕'} {check.explanation}: {check.actualValue === null ? 'Belum tersedia' : String(check.actualValue)} (syarat {String(check.requiredValue)})</span>) ?? <span>Belum tersedia pada versi analisis ini.</span>}</div></section>}
-        {data.ranking.decision && <DecisionCardView decision={data.ranking.decision} symbol={data.ranking.symbol} currentPrice={data.ranking.last_price} />}
-        <section><div className="ranking-detail-section-title"><div><span className="ranking-eyebrow">Factor breakdown</span><h3>Ranking, kualitas, eksekusi, dan konteks</h3></div><span>Skor ranking bukan probabilitas</span></div><div className="ranking-component-grid">{data.ranking.components.map((component) => <article className={`ranking-component-card ${component.available ? '' : 'unavailable'}`} key={component.key}><header><div><h4>{component.label}</h4><span>{component.role?.replaceAll('_', ' ') ?? 'legacy'} · {component.horizon?.replaceAll('_', ' ') ?? 'horizon legacy'} · Bobot {component.weight}%</span></div><strong>{component.score ?? '—'}</strong></header>{component.benchmarkScope && <p>Peer: {component.benchmarkScope} · sample {component.sampleSize ?? '—'}</p>}{component.methodologyVersion && <p>Metodologi: {component.methodologyVersion}</p>}{component.metrics.length ? <div>{component.metrics.map((metric) => <div className="ranking-detail-metric" key={metric.key} title={metric.description}><span>{metric.label}<small>{metric.description}</small></span><strong className={`analysis-signal-${metric.signal}`}>{formatMetric(metric)}</strong></div>)}</div> : <p>Unavailable—tidak diganti dengan nilai nol.</p>}{component.execution?.scenarios.map((scenario) => <div className="ranking-detail-metric" key={scenario.notional}><span>Skenario Rp{scenario.notional.toLocaleString('id-ID')}<small>Beli/jual, participation, dan depth; bukan rekomendasi personal.</small></span><strong>{scenario.executionStatus} · {scenario.estimatedBuySlippagePercent ?? '—'}% / {scenario.estimatedSellSlippagePercent ?? '—'}%</strong></div>)}{component.warnings?.map((warning) => <p className="ranking-risk" key={warning}>{warning}</p>)}</article>)}</div></section>
-        <section className="ranking-news-section"><div className="ranking-detail-section-title"><div><span className="ranking-eyebrow">Katalis terbaru</span><h3>Good News & Story Analysis</h3></div>{story?.created_at && <span>Diperbarui {new Date(story.created_at).toLocaleDateString('id-ID')}</span>}</div>{story?.status === 'completed' ? <>{story.swot_analysis?.ai_scoring && <div className="ranking-ai-score"><div><span>AI Story Score</span><strong>{story.swot_analysis.ai_scoring.score}/100</strong></div><div><span>AI Confidence</span><strong>{story.swot_analysis.ai_scoring.confidence}%</strong></div><div><span>Sentimen</span><strong>{story.swot_analysis.ai_scoring.sentiment}</strong></div><p>{story.swot_analysis.ai_scoring.rationale}</p></div>}<div className="ranking-news-grid">{(story.matriks_story ?? []).map((item, index) => <article key={`${item.kategori_story}-${index}`}><span>{item.kategori_story}</span><h4>{item.deskripsi_katalis}</h4><p>{item.logika_ekonomi_pasar}</p><strong>{item.potensi_dampak_harga}</strong></article>)}</div>{story.kesimpulan && <div className="ranking-news-conclusion"><strong>Kesimpulan story</strong><p>{story.kesimpulan}</p></div>}{story.sources && story.sources.length > 0 && <div className="ranking-news-sources">{story.sources.map((source) => <a href={source.uri} target="_blank" rel="noopener noreferrer" key={source.uri}>{source.title}</a>)}</div>}</> : <div className="ranking-news-empty"><strong>{storyLoading || story?.status === 'pending' || story?.status === 'processing' ? 'Good news sedang dianalisis…' : 'Good news belum dianalisis'}</strong><p>{storyLoading || story?.status === 'pending' || story?.status === 'processing' ? 'Gemini sedang mencari berita terbaru, memeriksa katalis, dan menyusun dampaknya. Modal akan diperbarui otomatis.' : 'Jalankan analisis untuk mencari berita dan katalis terbaru. Hasilnya akan disimpan dan dipakai pada screening berikutnya.'}</p>{storyError && <p className="ranking-error">{storyError}</p>}<button className="ranking-run-btn" onClick={startStoryAnalysis} disabled={storyLoading || story?.status === 'pending' || story?.status === 'processing'}>{storyLoading || story?.status === 'pending' || story?.status === 'processing' ? 'Analisis berjalan…' : story?.status === 'error' ? 'Coba Analisis Lagi' : 'Analisis Good News Sekarang'}</button></div>}</section>
+  return <div className="ranking-modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><section ref={modalRef} className="ranking-modal" role="dialog" aria-modal="true" aria-label="Detail analisis screening">
+    <button className="ranking-modal-close" onClick={onClose} aria-label="Tutup detail"><X size={20} /></button>
+    {loading && <div role="status" className="ranking-modal-state">Memuat seluruh parameter analisis…</div>}
+    {error && <div role="alert" className="ranking-modal-state ranking-error">{error}</div>}
+    {data && <><header className="ranking-detail-head"><div><span className="ranking-eyebrow">{profile?.name ?? 'Strategi legacy tidak terverifikasi'} · {ranking?.analysis_date ?? data.screening?.analysis_date}</span><h2>{symbol}</h2><p>{profile?.description ?? 'Identitas strategi snapshot lama tidak dapat dibuktikan.'}</p></div>{ranking && <div className="ranking-detail-score"><strong>{ranking.analysis_score ?? ranking.score}</strong><span>/100 Analisis</span><small>{ranking.data_completeness}% data tersedia</small></div>}</header>
+      <section className="screening-detail-provenance"><h3>Cutoff dan dukungan data</h3><p>Cutoff informasi: {displayTimestamp(cutoff)} · waktu screening: {displayTimestamp(data.run?.screened_at ?? data.run?.started_at)}</p><p>Mode: {String(data.run?.execution_mode ?? 'legacy_unverified')} · sesi: {String(data.run?.market_session ?? 'tidak terverifikasi')} · Asia/Jakarta</p><p>Dukungan: {support?.level ?? 'unavailable'} · {support?.reasons.join(' ') ?? 'Provenance strategi tidak tersedia.'}</p><p>Horizon: {profile?.horizon ?? 'Tidak terverifikasi'} · validitas sinyal: {ranking?.decision?.signalExpiresAt ? displayTimestamp(ranking.decision.signalExpiresAt) : profile ? `berakhir pada jendela entry ${profile.entry.end} WIB sesuai sesi strategi` : 'Tidak terverifikasi'}</p><p>Kelayakan backtest: {data.screening?.backtest_eligible === true ? 'Snapshot memenuhi syarat; outcome tetap memerlukan data setelah cutoff.' : data.screening?.backtest_eligible === false ? `Belum memenuhi syarat: ${data.screening.backtest_ineligibility_reasons?.map(reason => reason.message ?? reason.code).join(' · ') || 'provenance belum lengkap'}` : 'Belum terverifikasi; hanya arsip point-in-time dan outcome valid yang dapat dievaluasi.'}</p><p>Versi strategi: {ranking?.strategy_version ?? String(data.run?.strategy_version ?? 'legacy_unverified')} · konfigurasi: {ranking?.configuration_version ?? String(data.run?.configuration_version ?? 'unverified')}</p><p>Eksekusi: {ranking?.execution_model ?? String(data.run?.execution_model ?? 'unverified')} · outcome: {ranking?.outcome_definition ?? String(data.run?.outcome_definition ?? 'unverified')}</p></section>
+      {profile?.id === 'ara' && <section className="screening-detail-provenance"><h3>Status ARA</h3><p>{assessment?.monitoring === 'locked' ? 'Terkunci di ARA · monitoring' : assessment?.monitoring === 'already_touched' ? 'Sudah menyentuh ARA · monitoring' : assessment?.monitoring === 'candidate' ? 'Kandidat menuju ARA' : 'Status belum terverifikasi'}. {ranking?.decision?.executionEligible === true ? 'Kelayakan eksekusi memenuhi aturan snapshot.' : 'Eksekusi belum memenuhi syarat.'} Posisi antrean tidak diketahui; fill tidak dijamin.</p>{officialAra ? <><p>Batas resmi Rp {officialAra.price.toLocaleString('id-ID')} · sesi {officialAra.sessionDate} · papan {officialAra.board} · harga referensi Rp {officialAra.referencePrice.toLocaleString('id-ID')}</p><p>Diamati {displayTimestamp(officialAra.observedAt)} · tersedia {displayTimestamp(officialAra.availableAt)} · versi aturan {officialAra.rulesVersion}</p>{safeNewsUrl(officialAra.sourceUrl) && <a href={safeNewsUrl(officialAra.sourceUrl)!} target="_blank" rel="noopener noreferrer">Sumber batas ARA resmi</a>}</> : <p>Batas ARA resmi beserta provenance sumber belum tersedia.</p>}</section>}
+      {data.screening && <section className="ranking-detail-verdict"><h3>Kelayakan: {data.screening.screening_status ?? 'belum dievaluasi'}</h3>{(data.screening.eligibility_rules ?? data.screening.failed_rules).map(rule => <p key={rule.key}><strong>{rule.passed ? '✓' : '✕'} {rule.label}:</strong> {rule.explanation}<small> Aktual: {rule.category === 'process' ? 'Proses belum selesai' : typeof rule.actualValue === 'object' && rule.actualValue !== null ? JSON.stringify(rule.actualValue) : String(rule.actualValue ?? 'Tidak tersedia')} · syarat: {typeof rule.requiredValue === 'object' ? JSON.stringify(rule.requiredValue) : String(rule.requiredValue)}</small></p>)}</section>}
+      {ranking && <><section className="ranking-detail-verdict"><h3>Kualitas analisis</h3><div className="ranking-reasons"><span>Kelengkapan: {ranking.data_completeness}%</span><span>Agreement: {ranking.signal_agreement == null ? 'Belum tersedia' : `${ranking.signal_agreement}%`}</span><span>Confidence: {ranking.confidence == null ? 'Belum tersedia' : `${ranking.confidence}%`}</span><span>Arah dominan: {ranking.dominant_direction ?? 'Belum tersedia'}</span><span>Freshness: {ranking.freshness == null ? 'Belum tersedia' : `${ranking.freshness}%`}</span><span>Reliability: {ranking.reliability == null ? 'Belum tersedia' : `${ranking.reliability}%`}</span></div>{ranking.analysis_quality?.freshness.sources.map(source => <p className="ranking-note" key={source.source}>{source.source}: {source.status} · diamati {displayTimestamp(source.observedAt)}</p>)}{ranking.conflicts?.map(conflict => <p className="ranking-risk" key={conflict.key}>{conflict.message}</p>)}</section>
+        <section className="ranking-detail-verdict"><h3>{profile?.id === 'ara' ? 'Skor heuristik dan probabilitas ARA' : profile?.id === 'swing' ? 'Kalibrasi probabilitas 10 sesi' : `Kalibrasi ${profile?.horizon ?? 'belum terverifikasi'}`}</h3>{profile?.id === 'swing' && ranking.probability_calibration ? <><p>Peluang net return positif: {ranking.model_probability == null ? 'Belum tersedia' : `${(ranking.model_probability * 100).toFixed(1)}%`} · n={ranking.probability_calibration.sampleSize} outcome</p><p>Interval 95%: {ranking.probability_calibration.confidenceInterval.lower == null ? 'Belum tersedia' : `${(ranking.probability_calibration.confidenceInterval.lower * 100).toFixed(1)}–${(ranking.probability_calibration.confidenceInterval.upper! * 100).toFixed(1)}%`} · cutoff kalibrasi {ranking.probability_calibration.calibrationCutoff}</p>{ranking.probability_calibration.warnings.map(warning => <p className="ranking-risk" key={warning}>{warning}</p>)}</> : <p>Probabilitas belum tersedia: sampel valid untuk strategi dan definisi outcome ini belum cukup. Skor heuristik tidak boleh dibaca sebagai probabilitas.</p>}</section>
+        <section className="ranking-detail-verdict"><h3>Alasan hasil screening</h3><p>{buildDetailSummary(ranking)}</p><div className="ranking-reasons">{ranking.reasons.map(reason => <span className={reason.positive ? 'positive' : ''} key={reason.label}>{reason.label}: {reason.value}</span>)}</div>{ranking.risk_flags.length > 0 && <p className="ranking-risk">Risiko: {ranking.risk_flags.join(' · ')}</p>}</section>
+        {ranking.decision && <DecisionCardView decision={ranking.decision} symbol={ranking.symbol} currentPrice={ranking.last_price} strategyId={profile?.id} />}
+        <section><div className="ranking-detail-section-title"><div><span className="ranking-eyebrow">Rincian faktor</span><h3>Ranking, kualitas, eksekusi, dan konteks</h3></div><span>Skor ranking bukan probabilitas</span></div><div className="ranking-component-grid">{ranking.components.map(component => <article className={`ranking-component-card ${component.available ? '' : 'unavailable'}`} key={component.key}><header><div><h4>{component.label}</h4><span>{component.role?.replaceAll('_', ' ') ?? 'legacy'} · {component.horizon?.replaceAll('_', ' ') ?? 'horizon legacy'} · bobot {component.weight}%</span></div><strong>{component.score ?? '—'}</strong></header>{component.benchmarkScope && <p>Peer: {component.benchmarkScope} · sampel {component.sampleSize ?? '—'}</p>}{component.metrics.length ? <div>{component.metrics.map(metric => <div className="ranking-detail-metric" key={metric.key} title={metric.description}><span>{metric.label}<small>{metric.description}</small></span><strong className={`analysis-signal-${metric.signal}`}>{formatMetric(metric)}</strong></div>)}</div> : <p>Data tidak tersedia; tidak diganti dengan nol.</p>}{component.execution?.scenarios.map(scenario => <div className="ranking-detail-metric" key={scenario.notional}><span>Skenario Rp {scenario.notional.toLocaleString('id-ID')}<small>Beli/jual, partisipasi, dan kedalaman orderbook.</small></span><strong>{scenario.executionStatus} · {scenario.estimatedBuySlippagePercent ?? '—'}% / {scenario.estimatedSellSlippagePercent ?? '—'}%</strong></div>)}{component.warnings?.map(warning => <p className="ranking-risk" key={warning}>{warning}</p>)}</article>)}</div></section>
       </>}
-    </section>
-  </div>;
+      <section className="ranking-news-section"><h3>Berita dan pengayaan sumber</h3><ScreeningNews enrichment={displayedNews} /><p className="ranking-note">Ringkasan AI membantu membaca sumber. Timestamp atau konfirmasi primer yang tidak terbukti tetap ditandai tidak terverifikasi. Pembaruan setelah cutoff hanya menjadi monitoring dan tidak mengubah snapshot keputusan.</p>{story?.status === 'completed' && <><div className="ranking-news-grid">{(story.matriks_story ?? []).map((item, index) => <article key={`${item.kategori_story}-${index}`}><span>{item.kategori_story}</span><h4>{item.deskripsi_katalis}</h4><p>{item.logika_ekonomi_pasar}</p><strong>{item.potensi_dampak_harga}</strong></article>)}</div>{story.kesimpulan && <p>{story.kesimpulan}</p>}<div className="ranking-news-sources">{(Array.isArray(story.sources) ? story.sources.filter(source => source && typeof source.uri === 'string') : []).map((source, index) => safeNewsUrl(source.uri) ? <a href={safeNewsUrl(source.uri)!} target="_blank" rel="noopener noreferrer" key={`${source.uri}-${index}`}>{source.title}</a> : null)}</div></>}{storyError && <p role="alert" className="ranking-error">{storyError}</p>}{historical ? <p className="ranking-note">Historical replay hanya menggunakan arsip pada cutoff; retry berita live tidak tersedia.</p> : runId && profile ? <button className="ranking-run-btn" onClick={startStoryAnalysis} disabled={storyLoading || pending} data-testid="retry-enrichment">{storyLoading || pending ? 'Pengayaan diproses…' : 'Coba pengayaan berita'}</button> : <p className="ranking-note">Run dengan identitas strategi diperlukan untuk pengayaan yang dapat diaudit.</p>}</section>
+    </>}
+  </section></div>;
 }
-
 export function buildDetailSummary(ranking: StockRanking) {
-  const strongest = ranking.components.filter((component) => component.available && component.score !== null).sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 3);
-  const strengths = strongest.map((component) => `${component.label} ${component.score}/100`).join(', ');
-  const signalText = ranking.signal === 'confirmed_uptrend' ? 'Sinyal uptrend terkonfirmasi' : ranking.signal === 'early_uptrend' ? 'Sinyal awal uptrend' : ranking.signal === 'avoid' ? 'Status Avoid: faktor risiko atau kelengkapan data belum memadai' : 'Status Watch: menarik untuk dipantau, tetapi konfirmasi momentum belum lengkap';
-  const aiReason = ranking.reasons.find((reason) => reason.label === 'AI Story');
-  return `${signalText}. Saham ini masuk urutan kandidat karena skor gabungan ${ranking.score}/100, terutama ditopang oleh ${strengths || 'komponen data yang tersedia'}.${aiReason ? ` Validasi AI Story: ${aiReason.value}.` : ''} Kelengkapan data ${ranking.data_completeness}%, sehingga bagian yang belum tersedia tidak dianggap bernilai nol.`;
+  const strongest = ranking.components.filter(component => component.available && component.score !== null && component.key !== 'catalyst' && component.role !== 'informational').sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 3);
+  const strengths = strongest.map(component => `${component.label} ${component.score}/100`).join(', ');
+  const signalText = ranking.signal === 'confirmed_uptrend' ? 'Sinyal uptrend terkonfirmasi' : ranking.signal === 'early_uptrend' ? 'Sinyal awal uptrend' : ranking.signal === 'avoid' ? 'Status avoid: risiko atau kelengkapan data belum memadai' : 'Status watch: konfirmasi belum lengkap';
+  return `${signalText}. Skor analisis ${ranking.analysis_score ?? ranking.score}/100 didukung ${strengths || 'komponen yang tersedia'}. Kelengkapan data ${ranking.data_completeness}%; input yang tidak tersedia tidak dianggap nol.`;
 }

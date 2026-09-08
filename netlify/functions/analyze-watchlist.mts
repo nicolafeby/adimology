@@ -12,13 +12,18 @@ export default async (req: Request) => {
     
     console.log(`[Scheduler] Triggering background job at ${baseUrl}/.netlify/functions/analyze-watchlist-background`);
 
+    if (!process.env.CRON_SECRET) throw new Error('Background credential unavailable');
     // Trigger background function - this returns 202 immediately
     const response = await fetch(`${baseUrl}/.netlify/functions/analyze-watchlist-background`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-      }
+        'Authorization': `Bearer ${process.env.CRON_SECRET}`,
+      },
+      body: JSON.stringify({ mode: 'unified' }),
+      signal: AbortSignal.timeout(10_000),
     });
+    if (!response.ok) throw new Error('Background trigger failed');
 
     console.log(`[Scheduler] Background job triggered, status: ${response.status}`);
 
@@ -31,11 +36,12 @@ export default async (req: Request) => {
     console.error('[Scheduler] Netlify function error:', error);
     return new Response(JSON.stringify({
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: 'Background job tidak dapat dipicu.'
     }), { status: 500 });
   }
 };
 
 export const config: Config = {
-  schedule: "0 11 * * *"
+  // 08:40 UTC = 15:40 WIB, the opening minute for BSJP/Closing Priority.
+  schedule: "40 8 * * 1-5"
 };

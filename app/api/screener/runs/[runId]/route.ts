@@ -1,9 +1,14 @@
-import { NextResponse } from 'next/server';
-import { getScreeningRun } from '@/lib/supabase';
-
-export async function GET(_: Request, { params }: { params: Promise<{ runId: string }> }) {
-  const { runId } = await params;
-  if (!/^[0-9a-f-]{36}$/i.test(runId)) return NextResponse.json({ success: false, error: 'Run ID tidak valid' }, { status: 400 });
-  try { const run = await getScreeningRun(runId); return run ? NextResponse.json({ success: true, run, summary: run.summary ?? {} }) : NextResponse.json({ success: false, error: 'Run tidak ditemukan' }, { status: 404 }); }
-  catch { return NextResponse.json({ success: false, error: 'Run tidak dapat dimuat' }, { status: 500 }); }
+import { NextRequest, NextResponse } from 'next/server';
+import { getScreeningRun, recoverStaleScreeningRuns } from '@/lib/supabase';
+import { guardScreenerRequest, screeningQuery, screeningApiError } from '@/lib/screener-api';
+import { validRunId } from '@/lib/screener-request';
+export async function GET(request: NextRequest, { params }: { params: Promise<{ runId: string }> }) {
+ const denied = await guardScreenerRequest(request); if (denied) return denied;
+ try {
+  const { runId } = await params, { strategyId } = screeningQuery(request);
+  if (!validRunId(runId)) throw new RangeError('Run ID tidak valid.');
+  await recoverStaleScreeningRuns();
+  const run = await getScreeningRun(runId, strategyId);
+  return run ? NextResponse.json({ success: true, run, summary: run.summary ?? {} }) : NextResponse.json({ success: false, error: 'Run tidak ditemukan untuk preset ini.' }, { status: 404 });
+ } catch (error) { return screeningApiError(error, 'Run tidak dapat dimuat.'); }
 }

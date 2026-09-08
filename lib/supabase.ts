@@ -1,3 +1,4 @@
+import { parseStrategyId, type StrategyId } from './strategies';
 import { createClient } from '@supabase/supabase-js';
 import type { IdxListedCompany } from './idx';
 import { decryptSecret, encryptSecret, isSensitiveSessionKey } from './secret-storage';
@@ -338,7 +339,7 @@ export async function getLatestStockQuery(emiten: string) {
 export async function getRecentStockQueries(emiten: string, limit = 20) {
   const { data, error } = await supabase
     .from('stock_queries')
-    .select('from_date, bandar, barang_bandar, rata_rata_bandar, harga, total_bid, total_offer')
+    .select('from_date, to_date, created_at, bandar, barang_bandar, rata_rata_bandar, harga, total_bid, total_offer')
     .eq('emiten', emiten.toUpperCase())
     .eq('status', 'success')
     .order('from_date', { ascending: false })
@@ -727,14 +728,14 @@ export async function getLatestBackgroundJobLog(jobName: string) {
 /**
  * Get a profile setting by key
  */
-export async function getProfileSetting(key: string): Promise<string | null> {
-  const { data, error } = await supabase
+export async function getProfileSetting(key: string, strict = false, signal?: AbortSignal): Promise<string | null> {
+  const query = supabase
     .from('profile')
     .select('value')
-    .eq('key', key)
-    .single();
+    .eq('key', key);
+  const { data, error } = await (signal ? query.abortSignal(signal) : query).single();
 
-  if (error || !data) return null;
+  if (error || !data) { if (strict) throw new Error('Pengaturan keamanan tidak tersedia.'); return null; }
   return data.value;
 }
 
@@ -1161,6 +1162,7 @@ export async function saveStockRankings(rows: Array<Record<string, unknown>>) {
   // market_context is embedded in the existing components JSON. Strip the
   // convenience projection so deployments do not require an added DB column.
   const persistedRows = rows.map(({
+    strategy_id: _strategyId, strategy_version: _strategyVersion, configuration_version: _configurationVersion, execution_model: _executionModel, outcome_definition: _outcomeDefinition, run_id: _runId,
     market_context: _marketContext,
     decision: _decision,
     analysis_score: _analysisScore,
@@ -1248,13 +1250,18 @@ export async function failPendingScreeningRunItems(runId: string, failure: { sta
   if (error) throw error;
 }
 
-export async function getScreeningRun(runId: string) {
-  const { data, error } = await getSupabaseAdmin().from('screening_runs').select('*').eq('id', runId).maybeSingle();
+export async function recoverStaleScreeningRuns() {
+  const { error } = await getSupabaseAdmin().rpc('mark_stale_screening_runs', { p_timeout_minutes: 15 });
   if (error) throw error;
-  return data;
 }
 
-export async function getScreeningRunItems(runId: string, filters: { status?: string; stage?: string; preScreenPassed?: boolean; selectedForQuantitative?: boolean; screeningStatus?: string; aiStatus?: string; page?: number; pageSize?: number } = {}) {
+export async function getScreeningRun(runId: string, strategyId?: StrategyId) {
+  const { data, error } = await getSupabaseAdmin().from('screening_runs').select('*').eq('id', runId).maybeSingle();
+  if (error) throw error;
+  return data && (!strategyId || data.strategy_id === strategyId) ? data : null;
+}
+
+export async function getScreeningRunItems(runId: string, filters: { status?: string; stage?: string; preScreenPassed?: boolean; selectedForQuantitative?: boolean; screeningStatus?: string; aiStatus?: string; page?: number; pageSize?: number; newsLabel?: string } = {}) {
   const pageSize = Math.min(100, Math.max(1, filters.pageSize ?? 50));
   const from = Math.max(0, (filters.page ?? 1) - 1) * pageSize;
   let query = getSupabaseAdmin().from('screening_results').select('*', { count: 'exact' }).eq('run_id', runId);
@@ -1264,6 +1271,7 @@ export async function getScreeningRunItems(runId: string, filters: { status?: st
   if (filters.selectedForQuantitative !== undefined) query = query.eq('selected_for_quantitative', filters.selectedForQuantitative);
   if (filters.screeningStatus) query = query.eq('screening_status', filters.screeningStatus);
   if (filters.aiStatus) query = query.eq('ai_status', filters.aiStatus);
+  if (filters.newsLabel) query = query.contains('news_enrichment', { items: [{ labels: [filters.newsLabel] }] });
   const { data, error, count } = await query.order('symbol').range(from, from + pageSize - 1);
   if (error) throw error;
   return { data: data ?? [], total: count ?? 0, page: filters.page ?? 1, pageSize };
@@ -1280,58 +1288,51 @@ export async function getScreeningSymbolJourney(runId: string, symbol: string) {
 }
 
 export async function updateScreeningAiEnrichment(runId: string, symbol: string, enrichment: Record<string, unknown>) {
-  const { error } = await getSupabaseAdmin().from('screening_results').update(enrichment).eq('run_id', runId).eq('symbol', symbol);
+  const db = getSupabaseAdmin();
+  const run = await getScreeningRun(runId);
+  if (!run?.strategy_id || !run?.strategy_version) throw new Error('Strategy provenance missing');
+  const allowed = ['ai_status', 'ai_enrichment', 'ai_source', 'ai_requested_at', 'ai_completed_at', 'ai_error', 'news_enrichment'];
+  const values = Object.fromEntries(Object.entries(enrichment).filter(([key]) => allowed.includes(key)));
+  if ('news_enrichment' in values) {
+    const { data: existing, error } = await db.from('screening_results').select('news_enrichment').eq('run_id', runId).eq('symbol', symbol).maybeSingle();
+    if (error) throw error;
+    // AI retries cannot replace traceable source classifications from the decision.
+    if (existing?.news_enrichment?.items?.some((item: { decision_eligible?: boolean }) => item.decision_eligible === true)) delete values.news_enrichment;
+  }
+  const { error: auditError } = await db.from('screening_enrichments').insert({ run_id: runId, symbol, strategy_id: run.strategy_id, strategy_version: run.strategy_version, kind: 'ai', payload: values });
+  if (auditError) throw auditError;
+  const { error } = await db.from('screening_results').update(values).eq('run_id', runId).eq('symbol', symbol);
   if (error) throw error;
 }
 
-export async function getLatestScreeningRun(date?: string) {
+export async function getScreeningRunHistory(strategyId: StrategyId = 'swing', limit = 20) {
+  const { data, error } = await getSupabaseAdmin().from('screening_runs').select('*').eq('strategy_id', parseStrategyId(strategyId)).order('started_at', { ascending: false }).limit(limit);
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function getLatestScreeningRun(date?: string, strategyId: StrategyId = 'swing', options: { runId?: string; includeRunning?: boolean } = {}) {
   const db = getSupabaseAdmin();
-  let query = db.from('screening_runs').select('*').in('status', ['completed', 'partial']);
+  let query = db.from('screening_runs').select('*').eq('strategy_id', parseStrategyId(strategyId));
+  if (options.runId) query = query.eq('id', options.runId);
+  else query = query.in('status', options.includeRunning ? ['running', 'completed', 'partial', 'failed'] : ['completed', 'partial']);
   if (date) query = query.eq('analysis_date', date);
-  const { data: run, error } = await query.order('analysis_date', { ascending: false }).order('completed_at', { ascending: false }).limit(1).maybeSingle();
-  if (error) {
-    // Deployments that have not run migration 022 continue through legacy hydration.
-    if (error.code === '42P01' || error.code === 'PGRST205') return null;
-    throw error;
-  }
+  const { data: run, error } = await query.order('started_at', { ascending: false }).limit(1).maybeSingle();
+  if (error) throw error;
   if (!run) return null;
-  const { data, error: resultsError } = await db.from('screening_results').select('*').eq('run_id', run.id);
+  const { data, error: resultsError } = await db.from('screening_results').select('*').eq('run_id', run.id).eq('strategy_id', strategyId);
   if (resultsError) throw resultsError;
   return { run, results: data ?? [] };
 }
 
-export async function getStockRankingDetail(symbol: string, date?: string) {
-  const db = getSupabaseAdmin();
-  // Current screening snapshots are authoritative. The legacy ranking table can
-  // be stale when its best-effort compatibility write fails after commit.
-  let runQuery = db.from('screening_runs').select('id, analysis_date').eq('status', 'completed');
-  if (date) runQuery = runQuery.eq('analysis_date', date);
-  const { data: screeningRun, error: runError } = await runQuery.order('analysis_date', { ascending: false }).order('completed_at', { ascending: false }).limit(1).maybeSingle();
-  if (runError && runError.code !== '42P01' && runError.code !== 'PGRST205') throw runError;
-  let authoritativeRanking: Record<string, unknown> | null = null;
-  if (screeningRun) {
-    const { data: screeningRow, error: screeningError } = await db.from('screening_results').select('*').eq('run_id', screeningRun.id).eq('symbol', symbol.toUpperCase()).eq('screening_status', 'passed').maybeSingle();
-    if (screeningError) throw screeningError;
-    if (screeningRow?.ranking) authoritativeRanking = {
-      ...(screeningRow.ranking as Record<string, unknown>),
-      analysis_score: screeningRow.analysis_score ?? (screeningRow.ranking as Record<string, unknown>).score,
-      ranking_score: screeningRow.ranking_score ?? (screeningRow.ranking as Record<string, unknown>).ranking_score,
-      ranking_position: screeningRow.ranking_position ?? (screeningRow.ranking as Record<string, unknown>).rank,
-      eligibility_status: screeningRow.eligibility_status ?? 'eligible', eligibility_rules: screeningRow.eligibility_rules ?? [],
-      ranking_factors: screeningRow.ranking_factors ?? [], eligibility_config_version: screeningRow.eligibility_config_version ?? null,
-      ranking_model_version: screeningRow.ranking_model_version ?? null,
-    };
-  }
-  let rankingQuery = db.from('stock_rankings').select('*').eq('symbol', symbol.toUpperCase());
-  if (date) rankingQuery = rankingQuery.eq('analysis_date', date);
-  const [{ data: ranking, error: rankingError }, { data: story, error: storyError }] = await Promise.all([
-    rankingQuery.order('analysis_date', { ascending: false }).limit(1).maybeSingle(),
-    db.from('agent_stories').select('id, emiten, status, matriks_story, swot_analysis, checklist_katalis, keystat_signal, strategi_trading, kesimpulan, error_message, sources, created_at').eq('emiten', symbol.toUpperCase()).order('created_at', { ascending: false }).limit(1).maybeSingle(),
-  ]);
-  if (rankingError) throw rankingError;
-  if (storyError) throw storyError;
-  const selectedRanking = authoritativeRanking ?? ranking;
-  return { ranking: selectedRanking ? hydrateRankingMarketContext(selectedRanking) : selectedRanking, story };
+export async function getStockRankingDetail(symbol: string, date?: string, strategyId: StrategyId = 'swing', runId?: string) {
+  const snapshot = await getLatestScreeningRun(date, strategyId, { runId });
+  if (!snapshot) return { ranking: null, story: null, screening: null, run: null };
+  const screening = snapshot.results.find(row => row.symbol === symbol.toUpperCase());
+  if (!screening) return { ranking: null, story: null, screening: null, run: snapshot.run };
+  // Exact run enrichment only. A new story is a separate monitoring record.
+  const ranking = screening.ranking ? hydrateRankingMarketContext({ ...screening.ranking, strategy_id: strategyId, strategy_version: snapshot.run.strategy_version, configuration_version: snapshot.run.configuration_version, execution_model: snapshot.run.execution_model, outcome_definition: snapshot.run.outcome_definition, run_id: snapshot.run.id, eligibility_status: screening.eligibility_status, eligibility_rules: screening.eligibility_rules, news_enrichment: screening.news_enrichment, ai_status: screening.ai_status, ai_error: screening.ai_error }) : null;
+  return { ranking, story: screening.ai_enrichment ?? null, screening, run: snapshot.run };
 }
 
 export async function saveSignalSnapshots(rows: Array<Record<string, unknown>>) {
@@ -1352,11 +1353,11 @@ export async function saveSourceSnapshots(rows: Array<Record<string, unknown>>) 
   return data ?? [];
 }
 
-export async function getPendingSignalSnapshots(limit = 100, configVersion = 'legacy-v1') {
+export async function getPendingSignalSnapshots(limit = 100, configVersion = 'legacy-v1', strategyId: StrategyId = 'swing') {
   const db = getSupabaseAdmin();
   const { data: evaluated } = await db.from('signal_outcomes').select('snapshot_id').eq('backtest_config_version', configVersion);
   const ids = (evaluated ?? []).map((row) => row.snapshot_id);
-  let query = db.from('signal_snapshots').select('*').eq('point_in_time_valid', true).eq('backtest_eligible', true).lte('signal_date', new Date(Date.now() - 28 * 86400000).toISOString().slice(0, 10)).limit(limit);
+  let query = db.from('signal_snapshots').select('*').eq('strategy_id', strategyId).eq('point_in_time_valid', true).eq('backtest_eligible', true).lte('signal_date', new Date(Date.now() - (strategyId === 'swing' ? 28 : 1) * 86400000).toISOString().slice(0, 10)).limit(limit);
   if (ids.length) query = query.not('id', 'in', `(${ids.join(',')})`);
   const { data, error } = await query;
   if (error) throw error;
@@ -1365,7 +1366,7 @@ export async function getPendingSignalSnapshots(limit = 100, configVersion = 'le
 
 export async function saveSignalOutcome(row: Record<string, unknown>) {
   const outcomeDefinition = row.outcome_definition ?? (row.execution_model === 'entry_zone_conservative' ? 'net_return_10d_positive' : 'gross_return_10d_positive_legacy');
-  const { data, error } = await getSupabaseAdmin().from('signal_outcomes').upsert({ ...row, outcome_definition: outcomeDefinition }, { onConflict: 'snapshot_id,backtest_config_version' }).select().single();
+  const { data, error } = await getSupabaseAdmin().from('signal_outcomes').upsert({ ...row, outcome_definition: outcomeDefinition }, { onConflict: 'snapshot_id,backtest_config_version', ignoreDuplicates: true }).select().maybeSingle();
   if (error) throw error;
   return data;
 }
@@ -1374,7 +1375,7 @@ export async function getBacktestRows(modelVersion?: string) {
   const db = getSupabaseAdmin();
   const [{ data: outcomes, error: outcomeError }, { data: snapshots, error: snapshotError }] = await Promise.all([
     db.from('signal_outcomes').select('*'),
-    db.from('signal_snapshots').select('id, signal_date, score, signal, model_version, feature_snapshot, execution_mode, point_in_time_valid, backtest_eligible'),
+    db.from('signal_snapshots').select('id, signal_date, score, signal, model_version, feature_snapshot, execution_mode, point_in_time_valid, backtest_eligible, strategy_id, strategy_version, configuration_version, execution_model, outcome_definition, information_cutoff_at'),
   ]);
   if (outcomeError) throw outcomeError;
   if (snapshotError) throw snapshotError;
@@ -1387,19 +1388,25 @@ export async function getBacktestRows(modelVersion?: string) {
 
 export async function getCalibrationObservations(context: CalibrationContext): Promise<CalibrationObservation[]> {
   const db = getSupabaseAdmin();
-  const { data, error } = await db.from('signal_snapshots').select('id, signal_date, score, model_version, methodology_version, market_regime, feature_snapshot, execution_model, outcome_definition, selection_scope').eq('point_in_time_valid', true).eq('backtest_eligible', true).eq('model_version', context.modelVersion).eq('methodology_version', context.methodologyVersion).eq('execution_model', context.executionModel).eq('outcome_definition', context.outcomeDefinition).eq('selection_scope', context.selectionScope).lt('signal_date', context.analysisDate);
+  if (!context.strategyId || !context.strategyVersion || !context.configurationVersion || !context.executionMode || context.executionMode === 'legacy_unverified') return [];
+  const { data, error } = await db.from('signal_snapshots').select('id, signal_date, score, model_version, methodology_version, market_regime, feature_snapshot, execution_model, outcome_definition, selection_scope, strategy_id, strategy_version, configuration_version, execution_mode, point_in_time_valid, backtest_eligible').eq('strategy_id', context.strategyId).eq('strategy_version', context.strategyVersion).eq('configuration_version', context.configurationVersion).eq('execution_mode', context.executionMode).eq('point_in_time_valid', true).eq('backtest_eligible', true).eq('model_version', context.modelVersion).eq('methodology_version', context.methodologyVersion).eq('execution_model', context.executionModel).eq('outcome_definition', context.outcomeDefinition).eq('selection_scope', context.selectionScope).lt('signal_date', context.analysisDate);
   if (error) throw error;
   if (!data?.length) return [];
   const snapshotMap = new Map(data.map((row) => [row.id, row]));
-  const { data: outcomes, error: outcomeError } = await db.from('signal_outcomes').select('snapshot_id, net_return_percent, entry_triggered, is_ambiguous, exit_reason, execution_model, outcome_definition, evaluated_at').in('snapshot_id', [...snapshotMap.keys()]).eq('execution_model', context.executionModel).eq('outcome_definition', context.outcomeDefinition).eq('entry_triggered', true).eq('is_ambiguous', false).lte('evaluated_at', context.calibrationCutoff ?? new Date().toISOString()).not('net_return_percent', 'is', null);
+  const eventOutcome = context.outcomeDefinition === 'official_ara_touched_after_cutoff';
+  let outcomeQuery = db.from('signal_outcomes').select('snapshot_id, net_return_percent, entry_triggered, is_ambiguous, exit_reason, outcome_status, execution_model, outcome_definition, evaluated_at, horizon_outcomes').in('snapshot_id', [...snapshotMap.keys()]).eq('execution_model', context.executionModel).eq('outcome_definition', context.outcomeDefinition).eq('strategy_id', context.strategyId).eq('strategy_version', context.strategyVersion).eq('configuration_version', context.configurationVersion).eq('execution_mode', context.executionMode).eq('is_ambiguous', false).lte('evaluated_at', context.calibrationCutoff ?? new Date().toISOString());
+  if (!eventOutcome) outcomeQuery = outcomeQuery.eq('entry_triggered', true).not('net_return_percent', 'is', null);
+  const { data: outcomes, error: outcomeError } = await outcomeQuery;
   if (outcomeError) throw outcomeError;
   return (outcomes ?? []).flatMap((outcome) => {
     const snapshot = snapshotMap.get(outcome.snapshot_id);
     if (!snapshot) return [];
-    if (['no_entry', 'insufficient_data', 'ambiguous'].includes(String(outcome.exit_reason))) return [];
+    if (['no_entry', 'insufficient_data', 'ambiguous', 'pending', 'unfilled', 'excluded', 'open'].includes(String(outcome.exit_reason)) || ['pending', 'unfilled', 'excluded', 'open'].includes(String(outcome.outcome_status))) return [];
+    const event = outcome.horizon_outcomes?.strategyOutcome;
+    if (eventOutcome && (event?.status !== 'closed' || event?.alreadyTouchedBeforeCutoff || typeof event?.araTouchedAfterCutoff !== 'boolean')) return [];
     const regime = snapshot.market_regime ?? snapshot.feature_snapshot?.market_regime ?? 'unavailable';
     if (!['bullish', 'neutral', 'bearish', 'unavailable'].includes(regime)) return [];
-    return [{ score: Number(snapshot.score), modelVersion: String(snapshot.model_version), methodologyVersion: String(snapshot.methodology_version), marketRegime: regime, executionModel: String(outcome.execution_model), outcomeDefinition: outcome.outcome_definition, selectionScope: String(snapshot.selection_scope), signalDate: String(snapshot.signal_date), evaluatedAt: String(outcome.evaluated_at), netReturn10d: Number(outcome.net_return_percent) } as CalibrationObservation];
+    return [{ strategyId: snapshot.strategy_id, strategyVersion: snapshot.strategy_version, configurationVersion: snapshot.configuration_version, executionMode: snapshot.execution_mode, pointInTimeValid: snapshot.point_in_time_valid, backtestEligible: snapshot.backtest_eligible, outcomeStatus: 'closed', origin: snapshot.feature_snapshot?.origin ?? (snapshot.execution_mode === 'live' ? 'live_observed' : 'historical_archive'), eventSuccess: eventOutcome ? event.araTouchedAfterCutoff : undefined, score: Number(snapshot.score), modelVersion: String(snapshot.model_version), methodologyVersion: String(snapshot.methodology_version), marketRegime: regime, executionModel: String(outcome.execution_model), outcomeDefinition: outcome.outcome_definition, selectionScope: String(snapshot.selection_scope), signalDate: String(snapshot.signal_date), evaluatedAt: String(outcome.evaluated_at), netReturn10d: eventOutcome ? NaN : Number(outcome.net_return_percent) } as CalibrationObservation];
   });
 }
 
@@ -1433,7 +1440,7 @@ export async function getRecentAlertEvents(limit = 20) {
 
 export async function saveStockQueriesForRanking(results: Array<{
   symbol: string; sector?: string; brokerData: { bandar: string; barangBandar: number; rataRataBandar: number };
-  lastPrice: number; ara: number; arb: number; totalBid: number; totalOffer: number;
+  lastPrice: number; ara: number | null; arb: number | null; totalBid: number; totalOffer: number;
   targets: { fraksi: number; totalPapan: number; rataRataBidOfer: number | null; a: number; p: number | null; targetRealistis1: number | null; targetMax: number | null };
 }>, date: string) {
   if (!results.length) return [];
@@ -1449,4 +1456,23 @@ export async function saveStockQueriesForRanking(results: Array<{
   const { data, error } = await getSupabaseAdmin().from('stock_queries').upsert(rows, { onConflict: 'from_date,emiten' }).select();
   if (error) throw error;
   return data ?? [];
+}
+
+/** Only stored outcome archives; intraday outcome evaluation never falls back to daily/live. */
+export async function getStrategyOutcomeArchive(snapshotId: string | number): Promise<import('./strategy-backtest').StrategyOutcomeArchive | undefined> {
+  const { data, error } = await getSupabaseAdmin().from('strategy_outcome_archives').select('archive').eq('snapshot_id', snapshotId).order('recorded_at', { ascending: false }).limit(1).maybeSingle();
+  if (error) throw error;
+  return data?.archive as import('./strategy-backtest').StrategyOutcomeArchive | undefined;
+}
+
+/** Verified input archives only; absence never falls back to a daily/live endpoint. */
+export async function getStrategyScreeningInput(symbol: string, strategyId: StrategyId, cutoffAt: string, executionMode = 'live') {
+  const { strategyIdentity } = await import('./strategies');
+  const identity = strategyIdentity(strategyId);
+  let query = getSupabaseAdmin().from('source_snapshots').select('id,source,payload,available_at,observed_at,fetched_at,is_historical_snapshot').eq('symbol', symbol).eq('data_type', 'strategy_screening_input').eq('strategy_id', strategyId).eq('strategy_version', identity.strategy_version).eq('configuration_version', identity.configuration_version).lte('available_at', cutoffAt).lte('fetched_at', cutoffAt).eq('temporal_validation_status', 'valid');
+  if (executionMode === 'historical_replay') query = query.eq('is_historical_snapshot', true);
+  const { data: row, error } = await query.order('available_at', { ascending: false }).limit(1).maybeSingle();
+  if (error) throw error;
+  if (!row?.payload) return undefined;
+  return { data: row.payload as import('./strategy-screening').StrategyScreeningData, sourceSnapshotId: row.id as string, source: row.source as string, availableAt: row.available_at as string, observedAt: row.observed_at as string | null, fetchedAt: row.fetched_at as string, isHistoricalSnapshot: row.is_historical_snapshot as boolean };
 }

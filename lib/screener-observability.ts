@@ -66,5 +66,30 @@ export function safeProcessingError(error: unknown, fallbackCode: FunnelErrorCod
   const unsafe = SECRET_PATTERN.test(raw);
   const timeout = /timeout|timed out|abort/i.test(raw);
   const code: FunnelErrorCode = timeout ? (stage === 'ai_enrichment' ? 'AI_TIMEOUT' : fallbackCode) : fallbackCode;
-  return { code, stage, retryable: timeout || /429|5\d\d|network|fetch/i.test(raw), safe_message: unsafe ? 'Provider request failed; sensitive details were redacted.' : (raw || 'Processing failed.').slice(0, 240), occurred_at: new Date().toISOString() };
+  // Provider payloads, stack traces, URLs and database diagnostics stay server-side.
+  const message = unsafe ? 'Provider request failed; sensitive details were redacted.' : timeout ? 'Sumber data tidak merespons tepat waktu. Coba lagi.' : /429/.test(raw) ? 'Batas permintaan sumber data tercapai. Coba lagi nanti.' : /401|403/.test(raw) ? 'Akses sumber data kedaluwarsa atau tidak tersedia. Perbarui koneksi.' : 'Pemrosesan gagal. Coba lagi atau periksa koneksi sumber data.';
+  return { code, stage, retryable: timeout || /429|5\d\d|network|fetch/i.test(raw), safe_message: message, occurred_at: new Date().toISOString() };
+
+}
+
+/** Bounded timeout; callers must keep persistence outside the timed operation. */
+export async function withTimeout<T>(operation: () => Promise<T>, timeoutMs = 20_000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([operation(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Provider timeout')), timeoutMs); })]);
+  } finally { if (timer) clearTimeout(timer); }
+}
+
+/** Retry only temporary failures. Auth and malformed payloads require an explicit fix. */
+export async function withProviderRetry<T>(operation: () => Promise<T>, options: { timeoutMs?: number; attempts?: number; backoffMs?: number } = {}): Promise<T> {
+  const attempts = Math.min(3, Math.max(1, options.attempts ?? 2));
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try { return await withTimeout(operation, options.timeoutMs ?? 20_000); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt + 1 === attempts || !/429|5\d\d|network|fetch|timeout|abort/i.test(message) || /401|403/.test(message)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, (options.backoffMs ?? 150) * 2 ** attempt));
+    }
+  }
+  throw new Error('Provider unavailable');
 }

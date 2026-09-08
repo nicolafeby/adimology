@@ -10,7 +10,7 @@ export async function POST(request: NextRequest) {
     if (!isSameOrigin(request)) {
       return NextResponse.json({ success: false, error: 'Invalid origin' }, { status: 403 });
     }
-    const existingHash = await getProfileSetting('password_hash');
+    const existingHash = await getProfileSetting('password_hash', true);
     if (existingHash) {
       const session = await getSession(request);
       if (!session?.verified) {
@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Error setting password:', error);
     return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
+      { success: false, error: 'Pengaturan keamanan tidak dapat diproses. Coba lagi.' },
       { status: 500 }
     );
   }

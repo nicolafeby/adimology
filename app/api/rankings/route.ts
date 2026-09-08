@@ -1,24 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { formatMarketDate } from '@/lib/date';
-import { getLatestScreeningRun, getStockRankings } from '@/lib/supabase';
+import { getLatestScreeningRun } from '@/lib/supabase';
 import { groupScreeningResults } from '@/lib/screening';
-
+import { strategyIdentity, providerStrategySupport } from '@/lib/strategies';
+import { guardScreenerRequest, screeningQuery, screeningApiError } from '@/lib/screener-api';
+import { boundedInteger } from '@/lib/screener-request';
 export async function GET(request: NextRequest) {
+  const denied = await guardScreenerRequest(request); if (denied) return denied;
   try {
-    const date = request.nextUrl.searchParams.get('date') || undefined;
-    const limit = Math.min(100, Math.max(1, Number(request.nextUrl.searchParams.get('limit') || 10)));
-    const snapshot = await getLatestScreeningRun(date);
-    if (snapshot) {
-      const grouped = groupScreeningResults(snapshot.results, Number(snapshot.run.universe_count));
-      const data = grouped.results.passed.flatMap((row) => row.ranking ? [{ ...row.ranking, analysis_score: row.analysis_score ?? row.ranking.score, ranking_score: row.ranking_score ?? row.ranking.ranking_score ?? null, ranking_position: row.ranking_position ?? row.ranking.rank, eligibility_status: row.eligibility_status ?? 'eligible', eligibility_rules: row.eligibility_rules ?? [], ranking_factors: row.ranking_factors ?? [], eligibility_config_version: row.eligibility_config_version, ranking_model_version: row.ranking_model_version, ai_status: row.ai_status ?? 'not_requested', ai_enrichment: row.ai_enrichment ?? null, ai_source: row.ai_source ?? null, ai_error: row.ai_error ?? null }] : []).sort((a, b) => (a.ranking_position ?? Number.MAX_SAFE_INTEGER) - (b.ranking_position ?? Number.MAX_SAFE_INTEGER)).slice(0, limit);
-      return NextResponse.json({ success: true, analysisDate: snapshot.run.analysis_date, runId: snapshot.run.id, run: snapshot.run, quantitativeStatus: snapshot.run.quantitative_status ?? 'completed', enrichmentStatus: snapshot.run.enrichment_status ?? 'not_started', ...grouped, summary: Object.keys(snapshot.run.summary ?? {}).length ? snapshot.run.summary : grouped.summary, data });
-    }
-    const rankings = await getStockRankings(date, limit);
-    const analysisDate = rankings[0]?.analysis_date ?? date ?? formatMarketDate();
-    const legacy = rankings.map((ranking) => ({ symbol: ranking.symbol, analysis_date: analysisDate, screening_status: 'passed' as const, passed_rules: [], failed_rules: [], selection_stage: 'final_selection' as const, data_quality: { completeness: ranking.data_completeness ?? null, confidence: ranking.confidence ?? null, valid: true }, evaluated_at: ranking.created_at ?? `${analysisDate}T00:00:00Z`, run_id: `legacy-${analysisDate}`, ranking }));
-    const grouped = groupScreeningResults(legacy, legacy.length);
-    return NextResponse.json({ success: true, analysisDate, runId: `legacy-${analysisDate}`, ...grouped, data: rankings, deprecated: { data: 'Gunakan results.passed; data hanya memuat kandidat passed.' } });
-  } catch (error) {
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Gagal mengambil ranking' }, { status: 500 });
-  }
+    const { date, strategyId, runId } = screeningQuery(request);
+    const limit = boundedInteger(request.nextUrl.searchParams.get('limit'), 100, 1, 100, 'limit');
+    const snapshot = await getLatestScreeningRun(date, strategyId, { runId, includeRunning: true });
+    if (!snapshot) return NextResponse.json({ success: true, ...strategyIdentity(strategyId), strategyId, strategySupport: providerStrategySupport(strategyId), run: null, runId: null, results: { passed: [], watch: [], rejected: [], processingError: [] }, summary: {}, data: [] });
+    const grouped = groupScreeningResults(snapshot.results, Number(snapshot.run.universe_count));
+    const data = grouped.results.passed.flatMap(row => row.ranking ? [{ ...row.ranking, strategy_id: strategyId, strategy_version: snapshot.run.strategy_version, run_id: snapshot.run.id, eligibility_rules: row.eligibility_rules ?? [], ai_status: row.ai_status ?? 'not_requested', ai_enrichment: row.ai_enrichment ?? null, ai_error: row.ai_error ?? null, news_enrichment: row.news_enrichment ?? null }] : []).sort((a, b) => (a.ranking_position ?? a.rank) - (b.ranking_position ?? b.rank)).slice(0, limit);
+    return NextResponse.json({ success: true, strategyId, strategySupport: snapshot.run.strategy_support, analysisDate: snapshot.run.analysis_date, runId: snapshot.run.id, run: snapshot.run, quantitativeStatus: snapshot.run.quantitative_status, enrichmentStatus: snapshot.run.enrichment_status, ...grouped, summary: { ...snapshot.run.summary, ...grouped.summary }, data });
+  } catch (error) { return screeningApiError(error, 'Hasil screening tidak dapat dimuat.'); }
 }

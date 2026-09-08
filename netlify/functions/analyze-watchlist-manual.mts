@@ -1,6 +1,8 @@
+import { guardScreenerRequest } from '../../lib/screener-api';
 import type { Config } from "@netlify/functions";
 
 export default async (req: Request) => {
+  const denied = await guardScreenerRequest(req, true); if (denied) return denied;
   try {
     // Priority: process.env.URL (production) > default localhost:8888 or 9999
     const host = req.headers.get('host') || 'localhost:8888';
@@ -10,13 +12,18 @@ export default async (req: Request) => {
 
     console.log(`[Manual Trigger] Triggering background job at ${baseUrl}/.netlify/functions/analyze-watchlist-background`);
 
+    if (!process.env.CRON_SECRET) throw new Error('Background credential unavailable');
     // Trigger background function - this returns 202 immediately
     const response = await fetch(`${baseUrl}/.netlify/functions/analyze-watchlist-background`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-      }
+        'Authorization': `Bearer ${process.env.CRON_SECRET}`,
+      },
+      body: JSON.stringify({ mode: 'unified' }),
+      signal: AbortSignal.timeout(10_000),
     });
+    if (!response.ok) throw new Error('Background trigger failed');
 
     console.log(`[Manual Trigger] Background job triggered, status: ${response.status}`);
 
@@ -29,7 +36,7 @@ export default async (req: Request) => {
     console.error('[Manual Trigger] Netlify function error:', error);
     return new Response(JSON.stringify({
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: 'Background job tidak dapat dipicu.'
     }), { status: 500 });
   }
 };
